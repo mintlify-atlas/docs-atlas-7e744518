@@ -68,8 +68,7 @@ Use `deleteFile` to remove files from storage.
 ### Basic Usage
 
 ```ts
-import { deleteFile } from '#file-storage/server'
-
+// deleteFile is auto-imported by Nuxt
 export default defineEventHandler(async (event) => {
   await deleteFile('requiredFile.txt', '/userFiles')
   

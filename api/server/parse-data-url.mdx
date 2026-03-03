@@ -76,7 +76,7 @@ console.log(binaryString instanceof Buffer) // true
 ### Extract File Data from ServerFile
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)
@@ -95,7 +95,7 @@ export default defineEventHandler(async (event) => {
 
 ```typescript
 import { writeFile } from 'fs/promises'
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)
@@ -114,7 +114,7 @@ export default defineEventHandler(async (event) => {
 
 ```typescript
 import sharp from 'sharp'
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)
@@ -142,7 +142,7 @@ export default defineEventHandler(async (event) => {
 ### Validate File Type
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
 
@@ -170,7 +170,7 @@ export default defineEventHandler(async (event) => {
 
 ```typescript
 import crypto from 'crypto'
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)
@@ -194,7 +194,7 @@ export default defineEventHandler(async (event) => {
 ### Virus Scanning Before Storage
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 // Assuming you have a virus scanning library
 import { scanBuffer } from 'some-antivirus-lib'
 
@@ -224,7 +224,7 @@ export default defineEventHandler(async (event) => {
 
 ```typescript
 import sharp from 'sharp'
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)
@@ -254,7 +254,7 @@ export default defineEventHandler(async (event) => {
 ### Multiple File Processing
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { files } = await readBody<{ files: ServerFile[] }>(event)
@@ -277,7 +277,7 @@ export default defineEventHandler(async (event) => {
 ### Extract Metadata Without Storing
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)
@@ -315,7 +315,7 @@ try {
 ### Robust Error Handling
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)

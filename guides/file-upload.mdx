@@ -288,8 +288,7 @@ const cancelUpload = () => {
 If you need to work with the file data directly:
 
 ```ts
-import { parseDataUrl } from '#file-storage/server'
-
+// parseDataUrl is auto-imported by Nuxt
 export default defineEventHandler(async (event) => {
   const { files } = await readBody<{ files: ServerFile[] }>(event)
   

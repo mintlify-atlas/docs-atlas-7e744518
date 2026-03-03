@@ -107,7 +107,7 @@ The function automatically:
 ### Basic Usage with Auto-Generated Filename
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file } = await readBody<{ file: ServerFile }>(event)
@@ -122,7 +122,7 @@ export default defineEventHandler(async (event) => {
 ### Multiple File Upload
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { files } = await readBody<{ files: ServerFile[] }>(event)

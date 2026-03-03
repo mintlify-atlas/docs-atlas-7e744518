@@ -93,7 +93,7 @@ export default defineEventHandler(async (event) => {
 ### Delete Old File When Uploading New One
 
 ```typescript
-import type { ServerFile } from 'nuxt-file-storage'
+import type { ServerFile } from '#file-storage/types'
 
 export default defineEventHandler(async (event) => {
   const { file, oldFilename } = await readBody<{

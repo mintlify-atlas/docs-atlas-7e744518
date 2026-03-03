@@ -1,0 +1,96 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Nuxt File Storage",
+  "projectDescription": "Easy solution to upload, store, and manage files in Nuxt applications with built-in security features",
+  "theme": "mint",
+  "primaryColor": "#00dc82",
+  "lightColor": "#87ff5b",
+  "darkColor": "#00aa5e",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/overview",
+              "concepts/frontend-handling",
+              "concepts/backend-storage",
+              "concepts/security"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/file-upload",
+              "guides/multiple-inputs",
+              "guides/file-retrieval",
+              "guides/file-management",
+              "guides/configuration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Composables",
+            "pages": [
+              "api/composables/use-file-storage"
+            ]
+          },
+          {
+            "group": "Server Utilities",
+            "pages": [
+              "api/server/store-file-locally",
+              "api/server/get-file-locally",
+              "api/server/get-files-locally",
+              "api/server/retrieve-file-locally",
+              "api/server/delete-file",
+              "api/server/parse-data-url"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types/server-file",
+              "api/types/client-file",
+              "api/types/module-options"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Frontend file handling with useFileStorage composable",
+    "Secure backend file storage with path traversal protection",
+    "File serialization and data URL parsing",
+    "File retrieval with streaming support",
+    "File management (store, get, delete, list)",
+    "TypeScript support with comprehensive types",
+    "Configurable storage mount points"
+  ],
+  "publicApiSurface": [
+    "useFileStorage()",
+    "storeFileLocally()",
+    "getFileLocally()",
+    "getFilesLocally()",
+    "retrieveFileLocally()",
+    "deleteFile()",
+    "parseDataUrl()",
+    "ServerFile",
+    "ClientFile",
+    "ModuleOptions"
+  ]
+}

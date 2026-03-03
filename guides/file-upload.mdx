@@ -1,0 +1,358 @@
+---
+title: File Upload
+description: Complete guide to uploading files from frontend to backend in nuxt-file-storage
+---
+
+This guide covers the complete workflow for uploading files in your Nuxt application, from capturing user input to storing files on the server.
+
+## Overview
+
+The file upload process consists of three main steps:
+
+<Steps>
+  <Step title="Capture files from input">
+    Use the `useFileStorage` composable to handle file input events
+  </Step>
+  <Step title="Send files to backend">
+    Use `$fetch` to send serialized files to your API endpoint
+  </Step>
+  <Step title="Store files on server">
+    Use `storeFileLocally` to save files to the configured storage location
+  </Step>
+</Steps>
+
+## Frontend Setup
+
+### Basic File Input
+
+The `useFileStorage` composable automatically serializes files from file inputs, converting them to a format ready for transmission to the backend.
+
+```vue
+<template>
+  <input type="file" @input="handleFileInput" />
+  <button @click="submit">Upload</button>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+
+const submit = async () => {
+  const response = await $fetch('/api/files', {
+    method: 'POST',
+    body: {
+      files: files.value
+    }
+  })
+  console.log('Upload response:', response)
+}
+</script>
+```
+
+### Multiple File Selection
+
+Enable multiple file selection by adding the `multiple` attribute:
+
+```vue
+<template>
+  <input type="file" multiple @input="handleFileInput" />
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+</script>
+```
+
+### Composable Options
+
+The `useFileStorage` composable accepts an options object:
+
+<ParamField path="clearOldFiles" type="boolean" default="true">
+  When `true`, the `files` ref is cleared each time new files are selected. Set to `false` to accumulate files across multiple selections.
+</ParamField>
+
+```ts
+// Keep files from previous selections
+const { handleFileInput, files } = useFileStorage({ clearOldFiles: false })
+```
+
+### Returned Values
+
+<ResponseField name="files" type="Ref<ClientFile[]>">
+  A reactive ref containing the serialized files ready for upload. Each file includes:
+  - `name` - Original filename
+  - `size` - File size in bytes
+  - `type` - MIME type
+  - `lastModified` - Last modified timestamp
+  - `content` - Base64-encoded data URL
+</ResponseField>
+
+<ResponseField name="handleFileInput" type="(event: Event) => Promise<void>">
+  Event handler for file input changes. Returns a promise that resolves when all files are serialized.
+</ResponseField>
+
+<ResponseField name="clearFiles" type="() => void">
+  Manually clear all files from the `files` ref.
+</ResponseField>
+
+## Backend Implementation
+
+### Creating the API Route
+
+Create an API route to receive and store uploaded files:
+
+```ts server/api/files.ts
+import { ServerFile } from "#file-storage/types"
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  const fileNames: string[] = []
+
+  for (const file of files) {
+    // Store with auto-generated 8-character ID
+    const fileName = await storeFileLocally(file, 8, '/userFiles')
+    fileNames.push(fileName)
+  }
+
+  return fileNames
+})
+```
+
+### Storage Options
+
+The `storeFileLocally` function accepts three parameters:
+
+<ParamField path="file" type="ServerFile" required>
+  The file object from the request body
+</ParamField>
+
+<ParamField path="fileNameOrIdLength" type="string | number" required>
+  - **Number**: Generate a random ID with specified length (e.g., `8` creates an 8-character ID)
+  - **String**: Use as the filename (extension will be auto-corrected if needed)
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  Subdirectory within the configured mount path. Use `/userFiles`, `/images`, etc.
+</ParamField>
+
+### Filename Examples
+
+<CodeGroup>
+```ts Auto-generated ID
+// Generates random ID like "aBcD1234.png"
+const fileName = await storeFileLocally(file, 8, '/uploads')
+```
+
+```ts Custom filename
+// Uses exact filename: "profile.jpg"
+const fileName = await storeFileLocally(file, 'profile.jpg', '/uploads')
+```
+
+```ts Filename without extension
+// Auto-appends correct extension: "document.pdf"
+const fileName = await storeFileLocally(file, 'document', '/uploads')
+```
+</CodeGroup>
+
+<Note>
+  The file extension is automatically extracted from the MIME type or original filename. If you provide a custom filename with the wrong extension, it will be corrected and a warning logged.
+</Note>
+
+## Complete Working Example
+
+Here's a full example with file preview and upload feedback:
+
+```vue app.vue
+<template>
+  <div class="upload-container">
+    <label for="file-input" class="drop-zone">
+      <span class="drop-title">Drop files here</span>
+      <span>or</span>
+      <input
+        id="file-input"
+        type="file"
+        multiple
+        @input="handleFileInput"
+      />
+    </label>
+
+    <button @click="submit" :disabled="files.length === 0">
+      Upload {{ files.length }} file(s)
+    </button>
+
+    <p v-if="uploadStatus">{{ uploadStatus }}</p>
+
+    <!-- File previews -->
+    <div class="previews">
+      <img
+        v-for="file in files"
+        :key="file.name"
+        :src="file.content as string"
+        :alt="file.name"
+      />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+const { handleFileInput, files } = useFileStorage({ clearOldFiles: true })
+const uploadStatus = ref('')
+
+const submit = async () => {
+  try {
+    uploadStatus.value = 'Uploading...'
+    
+    const response = await $fetch('/api/files', {
+      method: 'POST',
+      body: {
+        files: files.value
+      }
+    })
+    
+    uploadStatus.value = `Uploaded ${response.length} files successfully!`
+    console.log('Uploaded files:', response)
+  } catch (error) {
+    uploadStatus.value = 'Upload failed'
+    console.error('Upload error:', error)
+  }
+}
+</script>
+
+<style scoped>
+.upload-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 2rem;
+  border: 2px dashed #ccc;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.drop-zone:hover {
+  background: #f5f5f5;
+}
+
+.previews {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1rem;
+}
+
+.previews img {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+</style>
+```
+
+## Advanced Usage
+
+### Waiting for File Serialization
+
+The `handleFileInput` function returns a promise, allowing you to wait for serialization to complete:
+
+```ts
+const handleInput = async (event: Event) => {
+  await handleFileInput(event)
+  console.log('Files ready:', files.value.length)
+  // Automatically upload after selection
+  await submit()
+}
+```
+
+### Manual File Clearing
+
+```ts
+const { handleFileInput, files, clearFiles } = useFileStorage()
+
+const cancelUpload = () => {
+  clearFiles()
+  console.log('Upload cancelled')
+}
+```
+
+### Parsing Data URLs Manually
+
+If you need to work with the file data directly:
+
+```ts
+import { parseDataUrl } from '#file-storage/server'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  for (const file of files) {
+    // Extract binary data and extension
+    const { binaryString, ext } = parseDataUrl(file.content)
+    
+    // Process the binary data as needed
+    console.log(`File extension: ${ext}`)
+    console.log(`File size: ${binaryString.length} bytes`)
+  }
+})
+```
+
+## Security Considerations
+
+<Warning>
+  Always validate file types, sizes, and content on the server side. The library includes path traversal protection, but you should implement additional validation based on your requirements.
+</Warning>
+
+### File Type Validation
+
+```ts
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  const allowedTypes = ['image/png', 'image/jpeg', 'application/pdf']
+  
+  for (const file of files) {
+    if (!allowedTypes.includes(file.type)) {
+      throw createError({
+        statusCode: 400,
+        message: `File type ${file.type} not allowed`
+      })
+    }
+    
+    await storeFileLocally(file, 8, '/uploads')
+  }
+})
+```
+
+### File Size Limits
+
+```ts
+const MAX_SIZE = 5 * 1024 * 1024 // 5MB
+
+for (const file of files) {
+  if (file.size > MAX_SIZE) {
+    throw createError({
+      statusCode: 413,
+      message: 'File too large'
+    })
+  }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multiple Inputs" icon="images" href="/guides/multiple-inputs">
+    Handle multiple file inputs on the same page
+  </Card>
+  <Card title="File Retrieval" icon="download" href="/guides/file-retrieval">
+    Serve and download uploaded files
+  </Card>
+</CardGroup>

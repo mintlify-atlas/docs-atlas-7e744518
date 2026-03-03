@@ -1,0 +1,630 @@
+---
+title: Security Features
+description: Built-in protections against path traversal, symlink attacks, and malicious filenames
+---
+
+## Security Architecture
+
+nuxt-file-storage implements multiple layers of security to protect your application from common file-handling vulnerabilities:
+
+1. **Path Traversal Protection** - Prevents `../` attacks
+2. **Filename Validation** - Blocks malicious filenames
+3. **Symlink Escape Prevention** - Detects symlink-based escapes
+4. **Mount Point Boundaries** - Enforces storage containment
+
+<Warning>
+While the module provides strong built-in security, you should always:
+- Validate file types against an allowlist
+- Enforce file size limits
+- Implement authentication and authorization
+- Scan uploaded files for malware in production
+</Warning>
+
+## Path Traversal Protection
+
+Path traversal attacks attempt to access files outside the intended directory using sequences like `../`, `..\\`, or encoded variants.
+
+### How Attacks Work
+
+**Example malicious filenames:**
+```
+../../../etc/passwd
+..\..\..\Windows\System32\config\sam
+....//....//....//etc/hosts
+%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd
+```
+
+### Detection Mechanism
+
+```ts
+// From path-safety.ts:28-35
+export const containsPathTraversal = (p: string): boolean => {
+  if (!p) return false
+  // detect any '..' path segment in the original string (defensive) 
+  // or after normalization
+  if (/^([[\\/]|^)?\.\.([\\/]|$)?/.test(p) || /(^|[\\/])\.\. ($|[\\/])/.test(p)) return true
+  const normalized = path.normalize(p)
+  const parts = normalized.split(/[/\\]+/)
+  return parts.includes('..')
+}
+```
+
+**Detection strategy:**
+1. **Regex patterns** - Check for `..` sequences before and after normalization
+2. **Path normalization** - Use Node.js `path.normalize()` to resolve segments
+3. **Part analysis** - Split the path and check each segment
+
+### Path Normalization
+
+```ts
+// From path-safety.ts:5-9
+export const normalizeRelative = (p: string): string => {
+  if (!p) return ''
+  // Remove leading slashes/backslashes and normalize separators
+  return p.replace(/^[/\\]+/, '').replace(/\\/g, '/')
+}
+```
+
+**Normalization rules:**
+- Leading slashes/backslashes are removed
+- Backslashes are converted to forward slashes
+- Paths are made relative to the mount point
+
+**Examples:**
+```ts
+normalizeRelative('/uploads')      // → 'uploads'
+normalizeRelative('\\uploads')     // → 'uploads'
+normalizeRelative('/a/b/c')        // → 'a/b/c'
+normalizeRelative('')              // → ''
+```
+
+### Boundary Enforcement
+
+The `resolveAndEnsureInside` function is the core security primitive:
+
+```ts
+// From path-safety.ts:41-79
+export const resolveAndEnsureInside = async (
+  mount: string,
+  ...parts: string[]
+): Promise<string> => {
+  if (!mount) throw new Error('Mount path must be provided')
+  const mountResolved = path.resolve(mount)
+  // strip leading separators from parts to avoid absolute components
+  const cleanedParts = parts.map((p) => p.replace(/^[/\\]+/, ''))
+  const targetResolved = path.resolve(mountResolved, ...cleanedParts)
+
+  // Quick check: ensure target is within mount using path.relative
+  const relative = path.relative(mountResolved, targetResolved)
+  if (relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..')) {
+    // Check for symlink escapes by resolving the nearest existing parent
+    let cur = targetResolved
+    while (cur) {
+      try {
+        await stat(cur)
+        break
+      } catch {
+        const parent = path.dirname(cur)
+        if (parent === cur) break
+        cur = parent
+      }
+    }
+
+    const mountReal = await realpath(mountResolved)
+    const curReal = await realpath(cur)
+    if (!curReal.startsWith(mountReal)) {
+      throw new Error('Resolved path escapes configured mount (symlink detected)')
+    }
+
+    return targetResolved
+  }
+  throw createError({
+    statusCode: 400,
+    statusMessage: 'Resolved path is outside of configured mount',
+  })
+}
+```
+
+**Security checks:**
+1. **Path resolution** - Convert to absolute paths
+2. **Relative path check** - Ensure target doesn't escape mount
+3. **Symlink resolution** - Follow symlinks and verify they stay inside mount
+4. **Final validation** - Throw error if any boundary is crossed
+
+### Usage in Storage Functions
+
+All storage operations use this protection:
+
+```ts
+// From storage.ts:83-86
+const normalizedFilelocation = normalizeRelative(filelocation)
+
+// ensure directory exists and is within mount
+const dirPath = await resolveAndEnsureInside(location, normalizedFilelocation)
+```
+
+```ts
+// From storage.ts:106-107
+// ensure target file will be inside mount (prevents traversal & symlink escape)
+const targetPath = await resolveAndEnsureInside(location, normalizedFilelocation, filename)
+```
+
+## Safe Filename Validation
+
+Filenames are validated to prevent injection attacks and filesystem manipulation.
+
+### Validation Rules
+
+```ts
+// From path-safety.ts:11-21
+export const isSafeBasename = (name: string): boolean => {
+  if (!name) return false
+  // Must be the basename, not contain slashes, no null bytes, 
+  // and not '.' or '..'
+  if (name !== path.basename(name)) return false
+  if (name.includes('\0')) return false
+  if (name === '.' || name === '..') return false
+  if (name.includes('/') || name.includes('\\')) return false
+  // Prevent any traversal tokens
+  if (name.split(/[/\\]+/).includes('..')) return false
+  return true
+}
+```
+
+**Validation checks:**
+1. **Non-empty** - Filename must exist
+2. **Basename only** - Must equal `path.basename()` (no paths)
+3. **No null bytes** - Prevents null-byte injection
+4. **Not `.` or `..`** - Blocks current/parent directory references
+5. **No separators** - No forward or backslashes allowed
+6. **No traversal tokens** - Double-check for `..` segments
+
+### Enforcement
+
+```ts
+// From path-safety.ts:23-26
+export const ensureSafeBasename = (name: string): string => {
+  if (!isSafeBasename(name)) throw new Error('Unsafe filename')
+  return name
+}
+```
+
+This is called on all user-provided filenames:
+
+```ts
+// From storage.ts:64
+ensureSafeBasename(fileNameOrIdLength)
+
+// From storage.ts:125
+ensureSafeBasename(filename)
+
+// From storage.ts:165
+ensureSafeBasename(filename)
+```
+
+### Blocked Filenames
+
+<Tabs>
+  <Tab title="Dangerous">
+    These filenames are rejected:
+    
+    ```
+    ../../../etc/passwd        // Path traversal
+    ..\..\..\Windows\System32  // Windows traversal
+    .                          // Current directory
+    ..                         // Parent directory
+    file/name.txt              // Contains separator
+    file\name.txt              // Contains backslash
+    file\x00.txt               // Null byte injection
+    /etc/passwd                // Absolute path
+    ```
+  </Tab>
+  <Tab title="Safe">
+    These filenames are allowed:
+    
+    ```
+    document.pdf               // Normal filename
+    my-photo.jpg               // With hyphen
+    report_2026.xlsx           // With underscore
+    file.name.with.dots.txt    // Multiple dots (ok)
+    file (1).png               // With parentheses
+    ```
+  </Tab>
+</Tabs>
+
+## Symlink Escape Prevention
+
+Symlink attacks create symbolic links that point outside the mount point, then upload files to those links.
+
+### How Symlink Attacks Work
+
+**Attack scenario:**
+```bash
+# Attacker creates a symlink in the upload directory
+ln -s /etc /storage/uploads/evil
+
+# Then uploads a file to that "directory"
+storeFileLocally(file, 'passwd', '/uploads/evil')
+# Without protection, this would write to /etc/passwd
+```
+
+### Detection and Prevention
+
+```ts
+// From path-safety.ts:54-71 (within resolveAndEnsureInside)
+// Check for symlink escapes by resolving the nearest existing parent
+let cur = targetResolved
+while (cur) {
+  try {
+    await stat(cur)
+    break
+  } catch {
+    const parent = path.dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+}
+
+const mountReal = await realpath(mountResolved)
+const curReal = await realpath(cur)
+if (!curReal.startsWith(mountReal)) {
+  throw new Error('Resolved path escapes configured mount (symlink detected)')
+}
+```
+
+**Protection strategy:**
+1. **Find existing parent** - Walk up the path until an existing directory is found
+2. **Resolve symlinks** - Use `realpath()` to follow all symlinks
+3. **Verify containment** - Ensure the real path is still inside the mount
+4. **Throw on escape** - Reject any path that escapes
+
+<Info>
+The `realpath()` function resolves all symbolic links, `.` and `..` references, returning the actual canonical path.
+</Info>
+
+### Protection in Action
+
+```ts
+// Mount: /storage
+// Symlink: /storage/uploads/link → /etc
+
+await storeFileLocally(file, 'test.txt', '/uploads/link')
+// ✗ Throws: "Resolved path escapes configured mount (symlink detected)"
+
+// The real path /etc is outside /storage, so it's rejected
+```
+
+## Mount Point Boundaries
+
+The mount point acts as a security boundary that no file operation can cross.
+
+### Configuration
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  fileStorage: {
+    mount: '/home/user/app/storage'  // All files contained here
+  }
+})
+```
+
+### Boundary Enforcement
+
+Every operation validates paths against the mount:
+
+```ts
+// From storage.ts:86
+const dirPath = await resolveAndEnsureInside(location, normalizedFilelocation)
+
+// From storage.ts:107
+const targetPath = await resolveAndEnsureInside(location, normalizedFilelocation, filename)
+
+// From storage.ts:150
+const dirPath = await resolveAndEnsureInside(location, normalizedFilelocation)
+
+// From storage.ts:167
+const targetPath = await resolveAndEnsureInside(location, normalizedFilelocation, filename)
+```
+
+### Directory Containment
+
+**Valid paths (inside mount):**
+```
+Mount: /storage
+
+/storage/uploads/file.jpg          ✓
+/storage/users/123/avatar.png      ✓
+/storage/documents/2026/03/doc.pdf ✓
+```
+
+**Invalid paths (outside mount):**
+```
+Mount: /storage
+
+/etc/passwd                        ✗
+/home/user/secrets/key.pem         ✗
+/storage/../etc/passwd             ✗ (resolves to /etc/passwd)
+```
+
+## Best Practices for Secure File Handling
+
+### 1. Validate File Types
+
+```ts
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  for (const file of files) {
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      throw createError({
+        statusCode: 400,
+        message: `File type ${file.type} not allowed`
+      })
+    }
+  }
+  
+  // Store files...
+})
+```
+
+<Warning>
+**Don't trust MIME types alone.** Attackers can manipulate the `type` field. Verify file contents with libraries like `file-type` for critical applications.
+</Warning>
+
+### 2. Enforce Size Limits
+
+```ts
+const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  for (const file of files) {
+    const size = parseInt(file.size, 10)
+    if (size > MAX_FILE_SIZE) {
+      throw createError({
+        statusCode: 400,
+        message: `File ${file.name} exceeds 5MB limit`
+      })
+    }
+  }
+})
+```
+
+### 3. Implement User Isolation
+
+```ts
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  const userId = event.context.user?.id
+  
+  if (!userId) {
+    throw createError({
+      statusCode: 401,
+      message: 'Authentication required'
+    })
+  }
+  
+  // Store in user-specific directory
+  for (const file of files) {
+    await storeFileLocally(file, 8, `/users/${userId}`)
+  }
+})
+```
+
+### 4. Use Random Filenames in Production
+
+```ts
+// ✓ Good: Random ID prevents collisions and guessing
+await storeFileLocally(file, 12, '/uploads')
+// Returns: "a7Kj9mP2xQw5.jpg"
+
+// ✗ Risky: Predictable names can be guessed
+await storeFileLocally(file, 'document', '/uploads')
+// Returns: "document.pdf" (predictable)
+```
+
+### 5. Sanitize Filenames in Responses
+
+```ts
+// When returning file paths to clients
+export default defineEventHandler(async (event) => {
+  const userId = event.context.user?.id
+  const files = await getFilesLocally(`/users/${userId}`)
+  
+  // Return only basenames, never full paths
+  return {
+    files: files.map(f => ({
+      name: path.basename(f),  // Only the filename
+      // DON'T: fullPath: getFileLocally(f, ...)
+    }))
+  }
+})
+```
+
+### 6. Verify File Ownership Before Deletion
+
+```ts
+export default defineEventHandler(async (event) => {
+  const { filename } = await readBody<{ filename: string }>(event)
+  const userId = event.context.user?.id
+  
+  if (!userId) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+  
+  // Ensure the file belongs to the user
+  const userFiles = await getFilesLocally(`/users/${userId}`)
+  
+  if (!userFiles.includes(filename)) {
+    throw createError({
+      statusCode: 403,
+      message: 'Not authorized to delete this file'
+    })
+  }
+  
+  await deleteFile(filename, `/users/${userId}`)
+})
+```
+
+### 7. Set Proper File Permissions
+
+```bash
+# Ensure the storage directory has restricted permissions
+chmod 750 /path/to/storage
+chown app-user:app-group /path/to/storage
+```
+
+### 8. Monitor and Log File Operations
+
+```ts
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  const userId = event.context.user?.id
+  
+  for (const file of files) {
+    const filename = await storeFileLocally(file, 8, `/users/${userId}`)
+    
+    // Log all uploads
+    console.log(`[UPLOAD] User ${userId} uploaded ${file.name} as ${filename}`)
+    
+    // Or use a proper logging system:
+    // logger.info('File uploaded', { userId, originalName: file.name, storedName: filename })
+  }
+})
+```
+
+### 9. Consider Virus Scanning
+
+For production applications handling user uploads:
+
+```ts
+import ClamScan from 'clamscan'
+
+const clamscan = await new ClamScan().init()
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  for (const file of files) {
+    // Store temporarily
+    const filename = await storeFileLocally(file, 8, '/temp')
+    const filePath = getFileLocally(filename, '/temp')
+    
+    // Scan for viruses
+    const { isInfected } = await clamscan.isInfected(filePath)
+    
+    if (isInfected) {
+      await deleteFile(filename, '/temp')
+      throw createError({
+        statusCode: 400,
+        message: 'File failed security scan'
+      })
+    }
+    
+    // Move to permanent storage
+    // ... (implementation depends on your needs)
+  }
+})
+```
+
+## Security Checklist
+
+<Check>
+- [ ] Mount point is configured with absolute path
+- [ ] File type validation is implemented
+- [ ] File size limits are enforced
+- [ ] User authentication is required for uploads
+- [ ] Files are isolated per user
+- [ ] Random IDs are used for filenames
+- [ ] Full paths are never exposed to clients
+- [ ] File ownership is verified before operations
+- [ ] Storage directory has restricted permissions
+- [ ] File operations are logged
+- [ ] Virus scanning is considered for production
+</Check>
+
+## Common Attack Scenarios and Mitigations
+
+<AccordionGroup>
+  <Accordion title="Path Traversal (../)">
+    **Attack:** User provides `../../../../etc/passwd` as filename
+    
+    **Mitigation:** 
+    - `ensureSafeBasename()` blocks filenames with `/` or `..`
+    - `resolveAndEnsureInside()` validates resolved paths
+    - Path normalization removes traversal sequences
+    
+    **Status:** ✓ Protected
+  </Accordion>
+  
+  <Accordion title="Symlink Escape">
+    **Attack:** User creates symlink to `/etc`, then uploads to it
+    
+    **Mitigation:**
+    - `resolveAndEnsureInside()` uses `realpath()` to follow symlinks
+    - Real path is verified against mount boundary
+    - Throws error if symlink points outside mount
+    
+    **Status:** ✓ Protected
+  </Accordion>
+  
+  <Accordion title="Null Byte Injection">
+    **Attack:** User provides `file.txt\x00.exe` to bypass extension checks
+    
+    **Mitigation:**
+    - `isSafeBasename()` explicitly checks for `\0`
+    - Extension is derived from MIME type, not filename
+    - Filename validation rejects null bytes
+    
+    **Status:** ✓ Protected
+  </Accordion>
+  
+  <Accordion title="Arbitrary File Overwrite">
+    **Attack:** User provides existing critical filename
+    
+    **Mitigation:**
+    - Use random ID generation (`storeFileLocally(file, 8, ...))`
+    - Implement user isolation in directory structure
+    - Verify ownership before operations
+    
+    **Status:** ⚠️ Requires proper usage (use random IDs)
+  </Accordion>
+  
+  <Accordion title="Resource Exhaustion">
+    **Attack:** User uploads huge files to fill disk
+    
+    **Mitigation:**
+    - Implement file size limits in your handler
+    - Use rate limiting for upload endpoints
+    - Monitor disk usage
+    
+    **Status:** ⚠️ Requires application-level enforcement
+  </Accordion>
+  
+  <Accordion title="Malware Upload">
+    **Attack:** User uploads executable malware
+    
+    **Mitigation:**
+    - Validate file types against allowlist
+    - Consider virus scanning (ClamAV, etc.)
+    - Store uploads in non-executable directory
+    - Set proper file permissions
+    
+    **Status:** ⚠️ Requires additional security layers
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api/server/store-file-locally">
+    Complete documentation of all security-related functions
+  </Card>
+  <Card title="File Upload Guide" icon="book" href="/guides/file-upload">
+    See secure implementation examples
+  </Card>
+</CardGroup>

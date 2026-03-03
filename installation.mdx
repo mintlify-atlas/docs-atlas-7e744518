@@ -1,0 +1,117 @@
+---
+title: Installation
+description: Install and configure nuxt-file-storage in your Nuxt application
+---
+
+# Installation
+
+Get started with Nuxt File Storage by installing the module and configuring your storage location.
+
+## Install the Module
+
+Add `nuxt-file-storage` as a dependency to your Nuxt project using your preferred package manager:
+
+<CodeGroup>
+```bash npm
+npm install --save-dev nuxt-file-storage
+```
+
+```bash yarn
+yarn add --dev nuxt-file-storage
+```
+
+```bash pnpm
+pnpm add -D nuxt-file-storage
+```
+
+```bash bun
+bun add -D nuxt-file-storage
+```
+</CodeGroup>
+
+## Register the Module
+
+Add `nuxt-file-storage` to the `modules` section of your `nuxt.config.ts`:
+
+```ts nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+})
+```
+
+That's it! The module is now installed and ready to use.
+
+## Configuration
+
+You can configure the storage mount point where files will be saved. This is the absolute path to the directory where uploaded files will be stored.
+
+### Basic Configuration
+
+Add the `fileStorage` configuration to your `nuxt.config.ts`:
+
+```ts nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  fileStorage: {
+    // Absolute path to your storage directory
+    mount: '/home/user/my-app/server/files',
+  },
+})
+```
+
+### Using Environment Variables (Recommended)
+
+For better security and flexibility across different environments, use environment variables:
+
+```ts nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  fileStorage: {
+    mount: process.env.FILE_STORAGE_MOUNT,
+  },
+})
+```
+
+Then create a `.env` file in your project root:
+
+```bash .env
+FILE_STORAGE_MOUNT=/home/user/my-app/server/files
+```
+
+<Tip>
+  Using environment variables allows you to use different storage locations for development, staging, and production environments.
+</Tip>
+
+## Configuration Options
+
+<ParamField path="mount" type="string" required>
+  The absolute path to the directory where files will be stored. This directory will be created automatically if it doesn't exist.
+  
+  **Example:** `/home/user/my-app/server/files`
+</ParamField>
+
+<Warning>
+  The mount path must be an absolute path. Relative paths are not supported. The module includes built-in path traversal protection to ensure files cannot be stored outside this configured directory.
+</Warning>
+
+## Verify Installation
+
+After installation, when you start your Nuxt development server, you should see a confirmation message:
+
+```bash
+Nuxt File Storage has mounted successfully
+```
+
+## TypeScript Support
+
+The module automatically provides TypeScript type definitions. You'll have full autocomplete and type checking for:
+
+- `useFileStorage()` composable
+- `ServerFile` and `ClientFile` types
+- Backend utility functions (`storeFileLocally`, `getFileLocally`, etc.)
+
+No additional configuration is needed for TypeScript support.
+
+## Next Steps
+
+Now that you have Nuxt File Storage installed and configured, check out the [Quickstart Guide](/quickstart) to see how to use it in your application.

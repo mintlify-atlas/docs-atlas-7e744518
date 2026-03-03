@@ -1,0 +1,580 @@
+---
+title: Backend Storage
+description: Understanding how files are received, validated, and stored on the server
+---
+
+## ServerFile Objects
+
+When files reach your backend API routes, they arrive as `ServerFile` objects. These objects contain the serialized file data sent from the frontend.
+
+### ServerFile Interface
+
+```ts
+interface ServerFile {
+  name: string          // Original filename
+  content: string       // Base64 data URL from FileReader
+  size: string          // File size in bytes (as string)
+  type: string          // MIME type (e.g., "image/jpeg")
+  lastModified: string  // Timestamp (as string)
+}
+```
+
+### Receiving Files in API Routes
+
+```ts
+// server/api/upload.ts
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  // files is an array of ServerFile objects
+  for (const file of files) {
+    console.log('Processing:', file.name)
+    console.log('Type:', file.type)
+    console.log('Size:', file.size, 'bytes')
+  }
+})
+```
+
+<Info>
+The `content` field contains a base64-encoded data URL that needs to be parsed before writing to disk. The storage utilities handle this automatically.
+</Info>
+
+## Storage Location Configuration
+
+All files are stored within a configured **mount point** - a root directory that serves as the boundary for all file operations.
+
+### Configuring the Mount Point
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  fileStorage: {
+    mount: '/absolute/path/to/storage'
+  }
+})
+```
+
+<Warning>
+**Critical:** The mount path must be an absolute path. Relative paths will cause errors.
+</Warning>
+
+### Using Environment Variables (Recommended)
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  fileStorage: {
+    mount: process.env.FILE_STORAGE_MOUNT
+  }
+})
+```
+
+```bash
+# .env
+FILE_STORAGE_MOUNT=/home/user/myapp/storage
+```
+
+**Benefits:**
+- Different paths for development, staging, and production
+- Sensitive paths stay out of version control
+- Easy deployment configuration
+
+### How Mount Points Work
+
+```ts
+// From storage.ts:13-20
+const getMount = (): string | undefined => {
+  try {
+    return useRuntimeConfig().public.fileStorage.mount
+  } catch {
+    // when running outside of a Nuxt context (tests), fall back to env var
+    return process.env.FILE_STORAGE_MOUNT || process.env.NUXT_FILE_STORAGE_MOUNT
+  }
+}
+```
+
+All file paths are resolved relative to this mount point, and the security layer ensures files cannot escape this boundary.
+
+## File Naming Strategies
+
+The `storeFileLocally` function supports two naming strategies controlled by the second parameter.
+
+### Auto-Generated IDs (Recommended)
+
+Pass a **number** to generate a random alphanumeric ID:
+
+```ts
+const filename = await storeFileLocally(
+  file,
+  8,           // Generate 8-character random ID
+  '/uploads'
+)
+// Returns: "a7Kj9mP2.jpg"
+```
+
+**ID Generation Logic:**
+
+```ts
+// From storage.ts:176-183
+const generateRandomId = (length: number) => {
+  const characters = 'ABCDEFGHIJKLMNOPXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  let randomId = ''
+  for (let i = 0; i < length; i++) {
+    randomId += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+  return randomId
+}
+```
+
+**Benefits:**
+- Prevents filename collisions
+- Avoids conflicts with user-uploaded names
+- URL-safe characters only
+- Configurable length for uniqueness needs
+
+**Recommended lengths:**
+- `6`: Short IDs for low-volume applications (~57 billion combinations)
+- `8`: Standard for most applications (~218 trillion combinations)
+- `12`: High-security or high-volume applications
+
+<Tip>
+For production applications with many users, use at least 8 characters to minimize collision probability.
+</Tip>
+
+### Custom Filenames
+
+Pass a **string** to use a custom filename:
+
+```ts
+const filename = await storeFileLocally(
+  file,
+  'profile-photo',  // Custom name
+  '/avatars'
+)
+// Returns: "profile-photo.jpg"
+```
+
+**Extension Handling:**
+
+```ts
+// From storage.ts:59-80
+let filename: string
+if (typeof fileNameOrIdLength === 'number') {
+  filename = `${generateRandomId(fileNameOrIdLength)}.${safeExt}`
+} else {
+  ensureSafeBasename(fileNameOrIdLength)
+  const extensionFromFileName = fileNameOrIdLength.split('.').pop()
+
+  if (!fileNameOrIdLength.includes('.')) {
+    // Case 1: No extension → append the correct one
+    filename = `${fileNameOrIdLength}.${safeExt}`
+  } else if (extensionFromFileName === safeExt) {
+    // Case 2: Correct extension → use as-is
+    filename = fileNameOrIdLength
+  } else {
+    // Case 3: Wrong extension → warn and replace it
+    console.warn(
+      `[nuxt-file-storage] The provided filename "${fileNameOrIdLength}" does not have the expected extension ".${safeExt}". The correct extension will be appended.`
+    )
+    filename = `${fileNameOrIdLength.split('.').slice(0, -1).join('.')}.${safeExt}`
+  }
+}
+```
+
+**Extension Cases:**
+
+```ts
+// Case 1: No extension provided
+await storeFileLocally(jpegFile, 'document', '/files')
+// Returns: "document.jpeg"
+
+// Case 2: Correct extension provided
+await storeFileLocally(jpegFile, 'document.jpeg', '/files')
+// Returns: "document.jpeg"
+
+// Case 3: Wrong extension provided (will warn)
+await storeFileLocally(jpegFile, 'document.png', '/files')
+// Console: Warning about wrong extension
+// Returns: "document.jpeg"
+```
+
+<Warning>
+Custom filenames are validated for security. They must not contain path separators, null bytes, or be `.` or `..`
+</Warning>
+
+### When to Use Each Strategy
+
+**Use auto-generated IDs when:**
+- Multiple users upload files with potentially duplicate names
+- You need guaranteed uniqueness
+- Building a general-purpose file storage system
+- Storing temporary or cache files
+
+**Use custom filenames when:**
+- Implementing user-specific files (e.g., `user-${userId}-avatar`)
+- Building a known file structure
+- Replacing existing files intentionally
+- Creating predictable file paths for direct access
+
+## Directory Structure and Organization
+
+The `filelocation` parameter organizes files into subdirectories within the mount point.
+
+### Basic Directory Structure
+
+```ts
+// Mount point: /storage
+
+await storeFileLocally(file, 8, '/uploads')
+// Saves to: /storage/uploads/{filename}
+
+await storeFileLocally(file, 8, '/avatars')
+// Saves to: /storage/avatars/{filename}
+
+await storeFileLocally(file, 8, '/documents/invoices')
+// Saves to: /storage/documents/invoices/{filename}
+```
+
+### Path Normalization
+
+```ts
+// From path-safety.ts:5-9
+export const normalizeRelative = (p: string): string => {
+  if (!p) return ''
+  // Remove leading slashes/backslashes and normalize separators
+  return p.replace(/^[/\\]+/, '').replace(/\\/g, '/')
+}
+```
+
+All paths are normalized before use:
+
+```ts
+// These all resolve to the same location:
+await storeFileLocally(file, 8, '/uploads')
+await storeFileLocally(file, 8, 'uploads')
+await storeFileLocally(file, 8, '\\uploads')
+// All save to: {mount}/uploads/{filename}
+```
+
+### Automatic Directory Creation
+
+```ts
+// From storage.ts:85-104
+const dirPath = await resolveAndEnsureInside(location, normalizedFilelocation)
+try {
+  await mkdir(dirPath, { recursive: true })
+} catch (err: any) {
+  if (err?.code === 'EEXIST') {
+    throw new Error(
+      `[nuxt-file-storage] EEXIST: A file already exists at "${dirPath}" where a directory was expected.`
+    )
+  } else if (err?.code === 'ENOTDIR') {
+    throw new Error(
+      `[nuxt-file-storage] ENOTDIR: Cannot create directory "${dirPath}" because a parent path component is a file, not a directory.`
+    )
+  }
+  throw err
+}
+```
+
+Directories are created automatically with detailed error handling:
+
+```ts
+// No need to create directories manually
+await storeFileLocally(file, 8, '/deeply/nested/path')
+// Creates: {mount}/deeply/nested/path/ automatically
+```
+
+### Organizing by User, Date, or Type
+
+```ts
+// By user ID
+const userId = event.context.user.id
+await storeFileLocally(file, 8, `/users/${userId}`)
+// Saves to: {mount}/users/{userId}/{filename}
+
+// By date
+const date = new Date()
+const year = date.getFullYear()
+const month = String(date.getMonth() + 1).padStart(2, '0')
+await storeFileLocally(file, 8, `/uploads/${year}/${month}`)
+// Saves to: {mount}/uploads/2026/03/{filename}
+
+// By file type
+const folder = file.type.startsWith('image/') ? '/images' : '/documents'
+await storeFileLocally(file, 8, folder)
+```
+
+### Complete Organization Example
+
+```ts
+// server/api/upload.ts
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  const userId = event.context.user?.id || 'anonymous'
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  
+  const uploadedFiles = []
+  
+  for (const file of files) {
+    // Organize: /users/{userId}/{year}/{month}/{type}/
+    let typeFolder = 'other'
+    if (file.type.startsWith('image/')) typeFolder = 'images'
+    else if (file.type.startsWith('video/')) typeFolder = 'videos'
+    else if (file.type === 'application/pdf') typeFolder = 'documents'
+    
+    const path = `/users/${userId}/${year}/${month}/${typeFolder}`
+    const filename = await storeFileLocally(file, 8, path)
+    
+    uploadedFiles.push({
+      filename,
+      path,
+      fullPath: `${path}/${filename}`
+    })
+  }
+  
+  return { success: true, files: uploadedFiles }
+})
+```
+
+## File Extension Handling
+
+Extensions are derived from the file's MIME type and validated for security.
+
+### Extension Detection
+
+```ts
+// From storage.ts:48-58
+const { binaryString, ext } = parseDataUrl(file.content)
+
+// Extract the file extension from the original filename
+const nameStr = file.name.toString()
+// If the provided filename contains a dot, use that extension; 
+// otherwise fall back to MIME-derived ext
+const originalExt = nameStr.includes('.') ? nameStr.split('.').pop() : ext
+// sanitize extension (keep alphanumerics only)
+const safeExt = (originalExt || ext).replace(/[^a-zA-Z0-9]/g, '') || ext
+```
+
+### MIME Type Parsing
+
+```ts
+// From storage.ts:195-208
+export const parseDataUrl = (file: string): { binaryString: Buffer; ext: string } => {
+  const arr: string[] = file.split(',')
+  const mimeMatch = arr[0].match(/:(.*?);/)
+  if (!mimeMatch) {
+    throw new Error('Invalid data URL')
+  }
+  const mime: string = mimeMatch[1]
+  const base64String: string = arr[1]
+  const binaryString: Buffer = Buffer.from(base64String, 'base64')
+
+  const ext = mime.split('/')[1]  // "image/jpeg" → "jpeg"
+
+  return { binaryString, ext }
+}
+```
+
+**MIME to Extension Examples:**
+- `image/jpeg` → `.jpeg`
+- `image/png` → `.png`
+- `application/pdf` → `.pdf`
+- `text/plain` → `.plain`
+
+### Extension Sanitization
+
+All extensions are sanitized to remove potentially dangerous characters:
+
+```ts
+const safeExt = (originalExt || ext).replace(/[^a-zA-Z0-9]/g, '') || ext
+```
+
+**Examples:**
+- `jpeg` → `jpeg` ✓
+- `../../../etc/passwd` → `etcpasswd` (made safe)
+- `exe` → `exe` (allowed but monitor in production)
+
+<Note>
+Extension sanitization prevents path traversal and injection attacks, but you should still validate allowed file types based on your application's needs.
+</Note>
+
+## Storage Utility Functions
+
+### storeFileLocally
+
+Stores a file and returns its filename.
+
+```ts
+const filename = await storeFileLocally(
+  file: ServerFile,
+  fileNameOrIdLength: string | number,
+  filelocation?: string
+): Promise<string>
+```
+
+**Example:**
+```ts
+const filename = await storeFileLocally(serverFile, 8, '/uploads')
+console.log('Stored as:', filename)
+```
+
+### getFileLocally
+
+Returns the absolute path to a stored file.
+
+```ts
+const filePath = getFileLocally(
+  filename: string,
+  filelocation?: string
+): string
+```
+
+**Example:**
+```ts
+const path = getFileLocally('a7Kj9mP2.jpg', '/uploads')
+// Returns: "/storage/uploads/a7Kj9mP2.jpg"
+```
+
+### getFilesLocally
+
+Lists all files in a directory.
+
+```ts
+const files = await getFilesLocally(
+  filelocation?: string
+): Promise<string[]>
+```
+
+**Example:**
+```ts
+const userFiles = await getFilesLocally(`/users/${userId}`)
+// Returns: ['file1.jpg', 'file2.pdf', 'file3.png']
+```
+
+### deleteFile
+
+Deletes a file from storage.
+
+```ts
+await deleteFile(
+  filename: string,
+  filelocation?: string
+): Promise<void>
+```
+
+**Example:**
+```ts
+await deleteFile('old-avatar.jpg', '/avatars')
+```
+
+### retrieveFileLocally
+
+Streams a file to the client with appropriate headers.
+
+```ts
+const stream = await retrieveFileLocally(
+  event: H3Event,
+  filename: string,
+  filelocation?: string
+): Promise<NodeJS.ReadableStream>
+```
+
+**Example:**
+```ts
+// server/api/download/[filename].ts
+export default defineEventHandler(async (event) => {
+  const filename = getRouterParam(event, 'filename')
+  return await retrieveFileLocally(event, filename, '/uploads')
+})
+```
+
+**Automatic headers set:**
+- `Content-Type`: Based on file extension
+- `Content-Length`: File size in bytes
+- `Content-Disposition`: `inline; filename="{filename}"`
+
+## Complete Storage Example
+
+```ts
+// server/api/files.ts
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const method = event.method
+  
+  // Upload files
+  if (method === 'POST') {
+    const { files } = await readBody<{ files: ServerFile[] }>(event)
+    const userId = event.context.user?.id
+    
+    if (!userId) {
+      throw createError({
+        statusCode: 401,
+        message: 'Unauthorized'
+      })
+    }
+    
+    const stored = []
+    for (const file of files) {
+      const filename = await storeFileLocally(
+        file,
+        12,  // 12-character unique ID
+        `/users/${userId}`
+      )
+      stored.push(filename)
+    }
+    
+    return { success: true, files: stored }
+  }
+  
+  // List user files
+  if (method === 'GET') {
+    const userId = event.context.user?.id
+    
+    if (!userId) {
+      throw createError({
+        statusCode: 401,
+        message: 'Unauthorized'
+      })
+    }
+    
+    const files = await getFilesLocally(`/users/${userId}`)
+    return { files }
+  }
+  
+  // Delete file
+  if (method === 'DELETE') {
+    const { filename } = await readBody<{ filename: string }>(event)
+    const userId = event.context.user?.id
+    
+    if (!userId) {
+      throw createError({
+        statusCode: 401,
+        message: 'Unauthorized'
+      })
+    }
+    
+    await deleteFile(filename, `/users/${userId}`)
+    return { success: true }
+  }
+})
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Security" icon="shield" href="/concepts/security">
+    Learn about path traversal protection and security measures
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/server/store-file-locally">
+    Explore complete API documentation
+  </Card>
+</CardGroup>

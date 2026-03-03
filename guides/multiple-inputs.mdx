@@ -1,0 +1,545 @@
+---
+title: Multiple File Inputs
+description: Managing multiple file input fields with separate state and handlers
+---
+
+When your application has multiple file input fields (e.g., profile picture, gallery images, documents), you need to manage each input's state separately.
+
+## Creating Separate Instances
+
+To handle multiple file inputs, create a new `useFileStorage` instance for each input field. This ensures that files from different inputs don't interfere with each other.
+
+```vue
+<template>
+  <div>
+    <!-- Profile image input -->
+    <input type="file" @input="handleProfileInput" accept="image/*" />
+    
+    <!-- Gallery images input -->
+    <input type="file" @input="handleGalleryInput" accept="image/*" multiple />
+  </div>
+</template>
+
+<script setup>
+// Separate instance for profile image
+const { 
+  handleFileInput: handleProfileInput, 
+  files: profileImage 
+} = useFileStorage()
+
+// Separate instance for gallery images
+const { 
+  handleFileInput: handleGalleryInput, 
+  files: galleryImages 
+} = useFileStorage()
+</script>
+```
+
+<Note>
+  Each call to `useFileStorage()` creates an independent instance with its own state. The files from one instance won't affect another.
+</Note>
+
+## Complete Example: Profile + Gallery
+
+Here's a practical example with a profile picture and a gallery of images:
+
+```vue
+<template>
+  <div class="upload-form">
+    <!-- Profile Picture Section -->
+    <section class="profile-section">
+      <h2>Profile Picture</h2>
+      <div class="input-group">
+        <label for="profile-input" class="upload-label">
+          Choose Profile Picture
+          <input
+            id="profile-input"
+            type="file"
+            accept="image/*"
+            @input="handleProfileInput"
+          />
+        </label>
+        
+        <!-- Profile preview -->
+        <div v-if="profileImage.length > 0" class="profile-preview">
+          <img 
+            :src="profileImage[0].content as string" 
+            :alt="profileImage[0].name"
+          />
+          <p>{{ profileImage[0].name }}</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Gallery Section -->
+    <section class="gallery-section">
+      <h2>Gallery Images</h2>
+      <div class="input-group">
+        <label for="gallery-input" class="upload-label">
+          Choose Gallery Images
+          <input
+            id="gallery-input"
+            type="file"
+            accept="image/*"
+            multiple
+            @input="handleGalleryInput"
+          />
+        </label>
+        
+        <!-- Gallery previews -->
+        <div v-if="galleryImages.length > 0" class="gallery-grid">
+          <div 
+            v-for="(image, index) in galleryImages" 
+            :key="image.name"
+            class="gallery-item"
+          >
+            <img 
+              :src="image.content as string" 
+              :alt="image.name"
+            />
+            <button @click="removeGalleryImage(index)" class="remove-btn">
+              &times;
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Submit Button -->
+    <button 
+      @click="submitAll" 
+      :disabled="profileImage.length === 0 && galleryImages.length === 0"
+      class="submit-btn"
+    >
+      Upload All Files
+    </button>
+    
+    <p v-if="uploadStatus" class="status">{{ uploadStatus }}</p>
+  </div>
+</template>
+
+<script setup lang="ts">
+// Profile image instance (single file)
+const { 
+  handleFileInput: handleProfileInput, 
+  files: profileImage,
+  clearFiles: clearProfile
+} = useFileStorage()
+
+// Gallery images instance (multiple files, accumulate)
+const { 
+  handleFileInput: handleGalleryInput, 
+  files: galleryImages,
+  clearFiles: clearGallery
+} = useFileStorage({ clearOldFiles: false })
+
+const uploadStatus = ref('')
+
+// Remove individual gallery image
+const removeGalleryImage = (index: number) => {
+  galleryImages.value.splice(index, 1)
+}
+
+// Submit all files to their respective endpoints
+const submitAll = async () => {
+  try {
+    uploadStatus.value = 'Uploading...'
+    
+    const promises = []
+    
+    // Upload profile image
+    if (profileImage.value.length > 0) {
+      promises.push(
+        $fetch('/api/profile/upload', {
+          method: 'POST',
+          body: { file: profileImage.value[0] }
+        })
+      )
+    }
+    
+    // Upload gallery images
+    if (galleryImages.value.length > 0) {
+      promises.push(
+        $fetch('/api/gallery/upload', {
+          method: 'POST',
+          body: { files: galleryImages.value }
+        })
+      )
+    }
+    
+    await Promise.all(promises)
+    
+    uploadStatus.value = 'All files uploaded successfully!'
+    
+    // Clear after successful upload
+    clearProfile()
+    clearGallery()
+  } catch (error) {
+    uploadStatus.value = 'Upload failed'
+    console.error('Upload error:', error)
+  }
+}
+</script>
+
+<style scoped>
+.upload-form {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+section {
+  margin-bottom: 2rem;
+  padding: 1.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.upload-label {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  background: #3b82f6;
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.2s;
+}
+
+.upload-label:hover {
+  background: #2563eb;
+}
+
+.upload-label input[type="file"] {
+  display: none;
+}
+
+.profile-preview {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.profile-preview img {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 2px solid #e5e7eb;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1rem;
+}
+
+.gallery-item {
+  position: relative;
+}
+
+.gallery-item img {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.remove-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 25px;
+  height: 25px;
+  background: rgba(239, 68, 68, 0.9);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.submit-btn {
+  width: 100%;
+  padding: 1rem;
+  background: #10b981;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.submit-btn:hover:not(:disabled) {
+  background: #059669;
+}
+
+.submit-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.status {
+  margin-top: 1rem;
+  text-align: center;
+  font-weight: 500;
+}
+</style>
+```
+
+## Backend Routes
+
+Create separate API routes for different file types:
+
+<CodeGroup>
+```ts server/api/profile/upload.ts
+import { ServerFile } from "#file-storage/types"
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  // Validate image type
+  if (!file.type.startsWith('image/')) {
+    throw createError({
+      statusCode: 400,
+      message: 'Only images are allowed for profile pictures'
+    })
+  }
+  
+  // Store with custom name (e.g., user ID)
+  const userId = event.context.user?.id || 'default'
+  const fileName = await storeFileLocally(
+    file, 
+    `profile-${userId}`, 
+    '/profiles'
+  )
+  
+  return { fileName, path: `/profiles/${fileName}` }
+})
+```
+
+```ts server/api/gallery/upload.ts
+import { ServerFile } from "#file-storage/types"
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  const fileNames: string[] = []
+  
+  for (const file of files) {
+    // Validate image type
+    if (!file.type.startsWith('image/')) {
+      continue // Skip non-images
+    }
+    
+    // Store with auto-generated ID
+    const fileName = await storeFileLocally(file, 12, '/gallery')
+    fileNames.push(fileName)
+  }
+  
+  return { 
+    count: fileNames.length,
+    files: fileNames.map(name => `/gallery/${name}`)
+  }
+})
+```
+</CodeGroup>
+
+## Best Practices
+
+### 1. Clear Naming Conventions
+
+Use descriptive variable names to distinguish between inputs:
+
+```ts
+// Good: Clear and descriptive
+const { handleFileInput: handleAvatarInput, files: avatar } = useFileStorage()
+const { handleFileInput: handleDocumentInput, files: documents } = useFileStorage()
+
+// Avoid: Generic names that cause confusion
+const { handleFileInput: input1, files: files1 } = useFileStorage()
+const { handleFileInput: input2, files: files2 } = useFileStorage()
+```
+
+### 2. Choose the Right clearOldFiles Setting
+
+<Accordion title="When to use clearOldFiles: true (default)">
+  Use for **single-selection inputs** where users should only have one file at a time:
+  - Profile pictures
+  - Resume/CV uploads
+  - Single document uploads
+  
+  ```ts
+  const { handleFileInput, files } = useFileStorage() // clearOldFiles: true
+  ```
+</Accordion>
+
+<Accordion title="When to use clearOldFiles: false">
+  Use for **multi-selection inputs** where users can add files incrementally:
+  - Photo galleries
+  - Multiple document uploads
+  - Batch file processing
+  
+  ```ts
+  const { handleFileInput, files } = useFileStorage({ clearOldFiles: false })
+  ```
+</Accordion>
+
+### 3. Organize by Purpose
+
+Group related inputs and create logical sections:
+
+```vue
+<template>
+  <form>
+    <!-- Personal Information -->
+    <section>
+      <h3>Personal Documents</h3>
+      <input type="file" @input="handleIdInput" accept=".pdf,.jpg" />
+      <input type="file" @input="handleResumeInput" accept=".pdf" />
+    </section>
+    
+    <!-- Media Files -->
+    <section>
+      <h3>Portfolio</h3>
+      <input type="file" multiple @input="handlePortfolioInput" accept="image/*" />
+    </section>
+  </form>
+</template>
+```
+
+### 4. Validation per Input Type
+
+Apply different validation rules for different inputs:
+
+```ts
+const validateProfileImage = (file: ClientFile) => {
+  const maxSize = 2 * 1024 * 1024 // 2MB
+  const allowedTypes = ['image/jpeg', 'image/png']
+  
+  if (file.size > maxSize) {
+    throw new Error('Profile image must be under 2MB')
+  }
+  
+  if (!allowedTypes.includes(file.type)) {
+    throw new Error('Only JPEG and PNG images are allowed')
+  }
+}
+
+const validateDocument = (file: ClientFile) => {
+  const maxSize = 10 * 1024 * 1024 // 10MB
+  const allowedTypes = ['application/pdf']
+  
+  if (file.size > maxSize) {
+    throw new Error('Document must be under 10MB')
+  }
+  
+  if (!allowedTypes.includes(file.type)) {
+    throw new Error('Only PDF documents are allowed')
+  }
+}
+```
+
+### 5. Independent Upload Controls
+
+Provide separate upload buttons for different file types:
+
+```vue
+<template>
+  <div>
+    <section>
+      <input type="file" @input="handleProfileInput" />
+      <button @click="uploadProfile">Upload Profile</button>
+    </section>
+    
+    <section>
+      <input type="file" multiple @input="handleGalleryInput" />
+      <button @click="uploadGallery">Upload Gallery</button>
+    </section>
+    
+    <button @click="uploadAll">Upload Everything</button>
+  </div>
+</template>
+
+<script setup>
+const uploadProfile = async () => {
+  // Upload only profile
+}
+
+const uploadGallery = async () => {
+  // Upload only gallery
+}
+
+const uploadAll = async () => {
+  // Upload both in parallel
+  await Promise.all([uploadProfile(), uploadGallery()])
+}
+</script>
+```
+
+## Common Patterns
+
+### Profile + Cover Image
+
+```ts
+const { handleFileInput: handleProfileInput, files: profilePic } = useFileStorage()
+const { handleFileInput: handleCoverInput, files: coverImage } = useFileStorage()
+```
+
+### Multiple Document Types
+
+```ts
+const { handleFileInput: handleIdInput, files: idDocument } = useFileStorage()
+const { handleFileInput: handleProofInput, files: proofOfAddress } = useFileStorage()
+const { handleFileInput: handleResumeInput, files: resume } = useFileStorage()
+```
+
+### Product Images (Main + Gallery)
+
+```ts
+const { handleFileInput: handleMainImageInput, files: mainImage } = useFileStorage()
+const { handleFileInput: handleGalleryInput, files: gallery } = useFileStorage({ clearOldFiles: false })
+```
+
+## Troubleshooting
+
+<Accordion title="Files from different inputs are mixed together">
+  Make sure you're creating separate `useFileStorage()` instances for each input:
+  
+  ```ts
+  // Wrong: Reusing the same instance
+  const { handleFileInput, files } = useFileStorage()
+  // Both inputs use the same instance
+  
+  // Correct: Separate instances
+  const instance1 = useFileStorage()
+  const instance2 = useFileStorage()
+  ```
+</Accordion>
+
+<Accordion title="Previous files disappear when selecting new ones">
+  Set `clearOldFiles: false` to accumulate files:
+  
+  ```ts
+  const { handleFileInput, files } = useFileStorage({ clearOldFiles: false })
+  ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="File Retrieval" icon="download" href="/guides/file-retrieval">
+    Learn how to retrieve and serve uploaded files
+  </Card>
+  <Card title="File Management" icon="folder" href="/guides/file-management">
+    Organize and manage uploaded files
+  </Card>
+</CardGroup>

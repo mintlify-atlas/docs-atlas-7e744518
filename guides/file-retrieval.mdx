@@ -1,0 +1,441 @@
+---
+title: File Retrieval
+description: Retrieve and serve uploaded files through API routes
+---
+
+Once files are stored using `storeFileLocally`, you need to retrieve and serve them to users. This guide covers the different methods for file retrieval and how to properly serve files through API routes.
+
+## Retrieval Methods
+
+nuxt-file-storage provides two primary methods for file retrieval:
+
+<CardGroup cols={2}>
+  <Card title="getFileLocally" icon="location-dot">
+    Returns the absolute file path as a string
+  </Card>
+  <Card title="retrieveFileLocally" icon="stream">
+    Returns a readable stream with proper headers set
+  </Card>
+</CardGroup>
+
+## Using getFileLocally
+
+The `getFileLocally` function returns the absolute path to a stored file. This is useful when you need the file path for further processing.
+
+### Basic Usage
+
+```ts
+export default defineEventHandler(async (event) => {
+  const filePath = getFileLocally('requiredFile.txt', '/userFiles')
+  // Returns: /absolute/path/to/mount/userFiles/requiredFile.txt
+  
+  return { path: filePath }
+})
+```
+
+### Parameters
+
+<ParamField path="filename" type="string" required>
+  The name of the file to retrieve (as returned by `storeFileLocally`)
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  The subdirectory where the file is stored (must match the location used in `storeFileLocally`)
+</ParamField>
+
+### Example: Using with fs module
+
+```ts
+import { readFile } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const filePath = getFileLocally('document.pdf', '/documents')
+  
+  // Read file content
+  const content = await readFile(filePath)
+  
+  // Process or return the content
+  return content
+})
+```
+
+## Using retrieveFileLocally
+
+The `retrieveFileLocally` function is the recommended way to serve files to clients. It automatically:
+- Sets appropriate `Content-Type` headers based on file extension
+- Sets `Content-Length` header
+- Sets `Content-Disposition` header for inline display or download
+- Returns a readable stream for efficient file transfer
+
+### Basic Usage
+
+```ts server/api/download/[filename].ts
+export default defineEventHandler(async (event) => {
+  const { filename } = event.context.params as { filename: string }
+  
+  return retrieveFileLocally(event, filename, '/userFiles')
+})
+```
+
+### Parameters
+
+<ParamField path="event" type="H3Event" required>
+  The event object from the event handler (used to set response headers)
+</ParamField>
+
+<ParamField path="filename" type="string" required>
+  The name of the file to retrieve
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  The subdirectory where the file is stored
+</ParamField>
+
+### Automatic Headers
+
+The function automatically sets headers based on the file:
+
+<ResponseField name="Content-Type" type="string">
+  Determined from file extension:
+  - `.png` → `image/png`
+  - `.jpg`, `.jpeg` → `image/jpeg`
+  - `.pdf` → `application/pdf`
+  - `.txt` → `text/plain`
+  - `.json` → `application/json`
+  - Default → `application/octet-stream`
+</ResponseField>
+
+<ResponseField name="Content-Length" type="string">
+  File size in bytes
+</ResponseField>
+
+<ResponseField name="Content-Disposition" type="string">
+  Set to `inline; filename="<filename>"` to display files in browser when possible
+</ResponseField>
+
+## Complete API Route Examples
+
+### Dynamic File Download Route
+
+Create a route that serves files with dynamic paths:
+
+```ts server/api/get/[...name].ts
+export default defineEventHandler(async (event) => {
+  // Grab the dynamic name param from the route
+  const { name } = event.context.params as { name: string }
+  
+  return retrieveFileLocally(event, name, '/specificFolder')
+})
+```
+
+Usage:
+```html
+<!-- In your frontend -->
+<a href="/api/get/myfile.pdf">Download PDF</a>
+<img src="/api/get/image.png" alt="Uploaded image" />
+```
+
+### File Download with Custom Name
+
+Override the filename shown to users:
+
+```ts server/api/download/[id].ts
+export default defineEventHandler(async (event) => {
+  const { id } = event.context.params as { id: string }
+  
+  // Get file from database or mapping
+  const file = await getFileInfoById(id)
+  
+  if (!file) {
+    throw createError({
+      statusCode: 404,
+      message: 'File not found'
+    })
+  }
+  
+  // Set custom filename for download
+  event.node.res.setHeader(
+    'Content-Disposition', 
+    `attachment; filename="${file.originalName}"`
+  )
+  
+  return retrieveFileLocally(event, file.storedName, '/uploads')
+})
+```
+
+### Protected File Access
+
+Restrict file access to authenticated users:
+
+```ts server/api/private/[filename].ts
+export default defineEventHandler(async (event) => {
+  // Check authentication
+  const user = event.context.user
+  if (!user) {
+    throw createError({
+      statusCode: 401,
+      message: 'Unauthorized'
+    })
+  }
+  
+  const { filename } = event.context.params as { filename: string }
+  
+  // Verify user has access to this file
+  const hasAccess = await checkFileAccess(user.id, filename)
+  if (!hasAccess) {
+    throw createError({
+      statusCode: 403,
+      message: 'Forbidden'
+    })
+  }
+  
+  return retrieveFileLocally(event, filename, '/private')
+})
+```
+
+### Image Thumbnails
+
+Serve optimized images:
+
+```ts server/api/thumbnails/[filename].ts
+import sharp from 'sharp'
+import { readFile } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const { filename } = event.context.params as { filename: string }
+  
+  // Get original file path
+  const filePath = getFileLocally(filename, '/images')
+  
+  // Create thumbnail
+  const thumbnail = await sharp(filePath)
+    .resize(200, 200, {
+      fit: 'cover',
+      position: 'center'
+    })
+    .jpeg({ quality: 80 })
+    .toBuffer()
+  
+  // Set headers
+  event.node.res.setHeader('Content-Type', 'image/jpeg')
+  event.node.res.setHeader('Content-Length', String(thumbnail.length))
+  
+  return thumbnail
+})
+```
+
+## Content-Type and Content-Disposition
+
+### Understanding Content-Type
+
+The `Content-Type` header tells the browser how to interpret the file:
+
+```ts
+// For images - browser displays them
+event.node.res.setHeader('Content-Type', 'image/jpeg')
+
+// For PDFs - browser may display inline or download
+event.node.res.setHeader('Content-Type', 'application/pdf')
+
+// For unknown types - browser downloads
+event.node.res.setHeader('Content-Type', 'application/octet-stream')
+```
+
+### Understanding Content-Disposition
+
+The `Content-Disposition` header controls how browsers handle the file:
+
+<CodeGroup>
+```ts Inline (Display in browser)
+// Browser attempts to display the file
+event.node.res.setHeader(
+  'Content-Disposition', 
+  'inline; filename="document.pdf"'
+)
+```
+
+```ts Attachment (Force download)
+// Browser downloads the file
+event.node.res.setHeader(
+  'Content-Disposition', 
+  'attachment; filename="document.pdf"'
+)
+```
+</CodeGroup>
+
+### Custom Header Example
+
+```ts server/api/files/[name].ts
+export default defineEventHandler(async (event) => {
+  const { name } = event.context.params as { name: string }
+  const { download } = getQuery(event)
+  
+  // Get file path
+  const filePath = getFileLocally(name, '/uploads')
+  
+  // Determine file type
+  const ext = name.split('.').pop()?.toLowerCase()
+  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext || '')
+  
+  // Set disposition based on query param or file type
+  const disposition = download === 'true' || !isImage 
+    ? 'attachment' 
+    : 'inline'
+  
+  event.node.res.setHeader(
+    'Content-Disposition',
+    `${disposition}; filename="${name}"`
+  )
+  
+  return retrieveFileLocally(event, name, '/uploads')
+})
+```
+
+Usage:
+```html
+<!-- Display in browser -->
+<img src="/api/files/photo.jpg" />
+
+<!-- Force download -->
+<a href="/api/files/photo.jpg?download=true">Download</a>
+```
+
+## Error Handling
+
+Handle common errors when retrieving files:
+
+```ts
+export default defineEventHandler(async (event) => {
+  const { filename } = event.context.params as { filename: string }
+  
+  try {
+    return await retrieveFileLocally(event, filename, '/uploads')
+  } catch (error: any) {
+    if (error.statusCode === 404) {
+      throw createError({
+        statusCode: 404,
+        message: 'File not found'
+      })
+    }
+    
+    if (error.statusCode === 400) {
+      throw createError({
+        statusCode: 400,
+        message: 'Invalid file path'
+      })
+    }
+    
+    // Generic error
+    throw createError({
+      statusCode: 500,
+      message: 'Failed to retrieve file'
+    })
+  }
+})
+```
+
+## Security Considerations
+
+<Warning>
+  The library includes path traversal protection, but you should still implement additional security measures:
+</Warning>
+
+### 1. Validate Filenames
+
+```ts
+const isValidFilename = (filename: string) => {
+  // Only allow alphanumeric, dash, underscore, and dot
+  return /^[a-zA-Z0-9-_.]+$/.test(filename)
+}
+
+export default defineEventHandler(async (event) => {
+  const { filename } = event.context.params as { filename: string }
+  
+  if (!isValidFilename(filename)) {
+    throw createError({
+      statusCode: 400,
+      message: 'Invalid filename'
+    })
+  }
+  
+  return retrieveFileLocally(event, filename, '/uploads')
+})
+```
+
+### 2. Check File Existence
+
+```ts
+import { access } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const { filename } = event.context.params as { filename: string }
+  const filePath = getFileLocally(filename, '/uploads')
+  
+  try {
+    await access(filePath)
+  } catch {
+    throw createError({
+      statusCode: 404,
+      message: 'File not found'
+    })
+  }
+  
+  return retrieveFileLocally(event, filename, '/uploads')
+})
+```
+
+### 3. Rate Limiting
+
+```ts
+import { rateLimit } from 'h3-rate-limit'
+
+const limiter = rateLimit({
+  max: 100, // 100 requests
+  duration: 60 * 1000, // per minute
+})
+
+export default defineEventHandler(async (event) => {
+  await limiter(event)
+  
+  const { filename } = event.context.params as { filename: string }
+  return retrieveFileLocally(event, filename, '/uploads')
+})
+```
+
+## Comparison: getFileLocally vs retrieveFileLocally
+
+<Accordion title="When to use getFileLocally">
+  Use when you need the file path for:
+  - Processing files (image manipulation, PDF generation)
+  - Reading file metadata
+  - Passing to other Node.js APIs
+  - Custom streaming logic
+  
+  ```ts
+  const path = getFileLocally('image.jpg', '/uploads')
+  const processed = await processImage(path)
+  ```
+</Accordion>
+
+<Accordion title="When to use retrieveFileLocally">
+  Use when you want to:
+  - Serve files directly to clients
+  - Let the library handle headers automatically
+  - Stream files efficiently
+  - Display images, PDFs, or other media in browsers
+  
+  ```ts
+  return retrieveFileLocally(event, 'image.jpg', '/uploads')
+  ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="File Management" icon="folder" href="/guides/file-management">
+    Learn how to list and delete files
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Configure storage paths and settings
+  </Card>
+</CardGroup>

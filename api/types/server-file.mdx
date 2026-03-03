@@ -1,0 +1,129 @@
+---
+title: 'ServerFile'
+description: 'TypeScript interface for file data received on the server side'
+---
+
+## Interface Definition
+
+```typescript
+export interface ServerFile {
+  name: string
+  content: string
+  size: string
+  type: string
+  lastModified: string
+}
+```
+
+## Properties
+
+<ResponseField name="name" type="string" required>
+  The name of the file, including its extension.
+</ResponseField>
+
+<ResponseField name="content" type="string" required>
+  The file content encoded as a data URL string. This contains the complete file data in base64 format with MIME type prefix (e.g., `data:image/png;base64,...`).
+</ResponseField>
+
+<ResponseField name="size" type="string" required>
+  The size of the file represented as a string (in bytes).
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  The MIME type of the file (e.g., `image/png`, `application/pdf`, `text/plain`).
+</ResponseField>
+
+<ResponseField name="lastModified" type="string" required>
+  The timestamp of when the file was last modified, represented as a string.
+</ResponseField>
+
+## Usage
+
+The `ServerFile` interface is used when receiving files in Nuxt server routes (API endpoints). Files sent from the client are automatically serialized into this format, allowing you to process and store them on the server.
+
+<Note>
+  `ServerFile` differs from `ClientFile` in that all properties are strings, making it suitable for JSON serialization when transferring files from client to server.
+</Note>
+
+## Examples
+
+### Receiving Files in an API Route
+
+```typescript
+import { ServerFile } from '#file-storage/types'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  for (const file of files) {
+    console.log(`Received file: ${file.name}`)
+    console.log(`File type: ${file.type}`)
+    console.log(`File size: ${file.size} bytes`)
+    
+    // Store the file
+    await storeFileLocally(
+      file,
+      8,           // Unique ID length
+      '/uploads'   // Storage directory
+    )
+  }
+  
+  return { success: true, count: files.length }
+})
+```
+
+### Processing File Content
+
+```typescript
+import { ServerFile } from '#file-storage/types'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  for (const file of files) {
+    // Parse the data URL to get binary data and file extension
+    const { binaryString, ext } = parseDataUrl(file.content)
+    
+    // Process the binary data as needed
+    // ...
+  }
+  
+  return { processed: true }
+})
+```
+
+### Type-Safe File Validation
+
+```typescript
+import { ServerFile } from '#file-storage/types'
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody<{ files: ServerFile[] }>(event)
+  
+  // Validate files
+  const validatedFiles = body.files.filter((file) => {
+    // Check file type
+    if (!file.type.startsWith('image/')) {
+      return false
+    }
+    
+    // Check file size (5MB limit)
+    const sizeInMB = parseInt(file.size) / (1024 * 1024)
+    if (sizeInMB > 5) {
+      return false
+    }
+    
+    return true
+  })
+  
+  // Store validated files
+  for (const file of validatedFiles) {
+    await storeFileLocally(file, 8, '/images')
+  }
+  
+  return {
+    uploaded: validatedFiles.length,
+    rejected: body.files.length - validatedFiles.length
+  }
+})
+```

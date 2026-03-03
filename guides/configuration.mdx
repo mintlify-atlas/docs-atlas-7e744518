@@ -1,0 +1,448 @@
+---
+title: Configuration
+description: Configure nuxt-file-storage mount path and storage settings
+---
+
+Configure where files are stored on your server by setting the `fileStorage.mount` option in your Nuxt configuration.
+
+## Basic Configuration
+
+Add the configuration to `nuxt.config.ts`:
+
+```ts nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    mount: '/absolute/path/to/storage'
+  }
+})
+```
+
+<Warning>
+  The `mount` path must be an **absolute path**. Relative paths are not supported.
+</Warning>
+
+## Using Environment Variables (Recommended)
+
+For better flexibility across different environments, use environment variables:
+
+<Steps>
+  <Step title="Create .env file">
+    Add the mount path to your `.env` file:
+    
+    ```bash .env
+    FILE_STORAGE_MOUNT=/home/user/myapp/storage
+    ```
+  </Step>
+  
+  <Step title="Reference in config">
+    Use `process.env` in your Nuxt config:
+    
+    ```ts nuxt.config.ts
+    export default defineNuxtConfig({
+      modules: ['nuxt-file-storage'],
+      
+      fileStorage: {
+        mount: process.env.FILE_STORAGE_MOUNT
+      }
+    })
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Using environment variables allows you to use different storage paths for development, staging, and production without changing your code.
+</Tip>
+
+## Environment-Specific Configuration
+
+Configure different paths for different environments:
+
+```ts nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    mount: process.env.NODE_ENV === 'production'
+      ? '/var/www/storage'
+      : '/home/dev/storage'
+  }
+})
+```
+
+### Environment Variable Fallback
+
+The library automatically checks for environment variables if the config is not set:
+
+<CodeGroup>
+```bash .env (Option 1)
+FILE_STORAGE_MOUNT=/path/to/storage
+```
+
+```bash .env (Option 2)
+NUXT_FILE_STORAGE_MOUNT=/path/to/storage
+```
+</CodeGroup>
+
+Both `FILE_STORAGE_MOUNT` and `NUXT_FILE_STORAGE_MOUNT` are supported.
+
+## Path Configuration Examples
+
+### Development Setup
+
+```ts nuxt.config.ts
+import { join } from 'path'
+
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    // Store in project directory during development
+    mount: join(process.cwd(), 'storage')
+  }
+})
+```
+
+### Production Setup
+
+<CodeGroup>
+```bash .env.production
+# Linux/Unix
+FILE_STORAGE_MOUNT=/var/www/myapp/storage
+
+# Or use user home directory
+FILE_STORAGE_MOUNT=/home/appuser/storage
+```
+
+```bash .env.production (Windows)
+FILE_STORAGE_MOUNT=C:\\www\\myapp\\storage
+```
+</CodeGroup>
+
+### Docker Setup
+
+```dockerfile Dockerfile
+FROM node:20-alpine
+
+# Create storage directory
+RUN mkdir -p /app/storage
+
+# Set environment variable
+ENV FILE_STORAGE_MOUNT=/app/storage
+
+WORKDIR /app
+COPY . .
+
+RUN npm install
+RUN npm run build
+
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+With docker-compose:
+
+```yaml docker-compose.yml
+version: '3.8'
+services:
+  app:
+    build: .
+    environment:
+      - FILE_STORAGE_MOUNT=/app/storage
+    volumes:
+      # Mount volume to persist files
+      - ./storage:/app/storage
+    ports:
+      - "3000:3000"
+```
+
+## Absolute vs Relative Paths
+
+### Absolute Paths (Required)
+
+The mount path **must** be absolute:
+
+<CodeGroup>
+```ts Valid absolute paths
+// Linux/Unix
+'/home/user/storage'
+'/var/www/storage'
+'/opt/myapp/files'
+
+// Windows
+'C:\\Users\\User\\storage'
+'D:\\www\\files'
+```
+
+```ts Invalid relative paths
+// These will NOT work
+'./storage'
+'../files'
+'storage'
+```
+</CodeGroup>
+
+### Converting Relative to Absolute
+
+If you have a relative path, convert it to absolute:
+
+```ts nuxt.config.ts
+import { join, resolve } from 'path'
+
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    // Convert relative path to absolute
+    mount: resolve(process.cwd(), 'storage')
+  }
+})
+```
+
+## Directory Structure
+
+Once configured, organize your storage with subdirectories:
+
+```
+/your/mount/path/
+├── uploads/          # General uploads
+├── images/           # Image files
+│   ├── avatars/
+│   └── products/
+├── documents/        # Documents
+│   ├── invoices/
+│   └── contracts/
+├── temp/             # Temporary files
+└── users/            # User-specific files
+    ├── 123/
+    └── 456/
+```
+
+Subdirectories are created automatically when you use them:
+
+```ts
+// This creates /your/mount/path/users/123/ if it doesn't exist
+await storeFileLocally(file, 8, '/users/123')
+```
+
+## Permissions
+
+Ensure the Node.js process has read/write permissions for the mount directory:
+
+### Linux/Unix
+
+```bash
+# Create directory
+mkdir -p /var/www/storage
+
+# Set ownership (replace 'appuser' with your user)
+chown -R appuser:appuser /var/www/storage
+
+# Set permissions
+chmod -R 755 /var/www/storage
+```
+
+### Checking Permissions
+
+```bash
+# Check current permissions
+ls -la /var/www/storage
+
+# Should show something like:
+# drwxr-xr-x  2 appuser appuser 4096 Mar 15 10:30 storage
+```
+
+## Configuration Validation
+
+Verify your configuration is correct:
+
+```ts server/api/config/check.ts
+export default defineEventHandler((event) => {
+  const config = useRuntimeConfig(event)
+  const mount = config.public.fileStorage.mount
+  
+  if (!mount) {
+    throw createError({
+      statusCode: 500,
+      message: 'fileStorage.mount is not configured'
+    })
+  }
+  
+  return {
+    configured: true,
+    mount,
+    isAbsolute: mount.startsWith('/') || /^[A-Z]:\\/.test(mount)
+  }
+})
+```
+
+### Test Upload Endpoint
+
+Create a test endpoint to verify everything works:
+
+```ts server/api/test/upload.ts
+import { writeFile } from 'fs/promises'
+import { join } from 'path'
+
+export default defineEventHandler(async (event) => {
+  const config = useRuntimeConfig(event)
+  const mount = config.public.fileStorage.mount
+  
+  if (!mount) {
+    throw createError({
+      statusCode: 500,
+      message: 'Storage not configured'
+    })
+  }
+  
+  try {
+    // Try to write a test file
+    const testPath = join(mount, 'test.txt')
+    await writeFile(testPath, 'test content')
+    
+    return {
+      success: true,
+      message: 'Storage is configured correctly',
+      path: testPath
+    }
+  } catch (error: any) {
+    throw createError({
+      statusCode: 500,
+      message: `Storage error: ${error.message}`
+    })
+  }
+})
+```
+
+## Common Issues
+
+<Accordion title="Error: fileStorage.mount is not configured">
+  The mount path is not set or is undefined.
+  
+  **Solutions:**
+  1. Add `fileStorage.mount` to your `nuxt.config.ts`
+  2. Set `FILE_STORAGE_MOUNT` or `NUXT_FILE_STORAGE_MOUNT` environment variable
+  3. Ensure your `.env` file is in the project root
+  4. Verify environment variables are loaded (check with `console.log(process.env.FILE_STORAGE_MOUNT)`)
+</Accordion>
+
+<Accordion title="EACCES: permission denied">
+  The Node.js process doesn't have permission to write to the directory.
+  
+  **Solutions:**
+  1. Check directory ownership: `ls -la /path/to/storage`
+  2. Change ownership: `chown -R $USER:$USER /path/to/storage`
+  3. Set proper permissions: `chmod -R 755 /path/to/storage`
+  4. Run Node.js with appropriate user permissions
+</Accordion>
+
+<Accordion title="ENOENT: no such file or directory">
+  The mount directory doesn't exist.
+  
+  **Solutions:**
+  1. Create the directory: `mkdir -p /path/to/storage`
+  2. Ensure the path in your config is correct
+  3. Check for typos in the path
+  4. Verify the path is absolute, not relative
+</Accordion>
+
+<Accordion title="Path must be absolute">
+  You're using a relative path instead of an absolute path.
+  
+  **Solution:**
+  Convert relative to absolute:
+  ```ts
+  import { resolve } from 'path'
+  
+  fileStorage: {
+    mount: resolve(process.cwd(), 'storage')
+  }
+  ```
+</Accordion>
+
+## Runtime Config Access
+
+Access the mount path in your server code:
+
+```ts
+export default defineEventHandler((event) => {
+  const config = useRuntimeConfig(event)
+  const mount = config.public.fileStorage.mount
+  
+  console.log('Storage mount:', mount)
+})
+```
+
+## Multiple Storage Locations
+
+While the library only supports one mount point, you can organize multiple storage areas using subdirectories:
+
+```ts
+const STORAGE_FOLDERS = {
+  UPLOADS: '/uploads',
+  IMAGES: '/images',
+  DOCUMENTS: '/documents',
+  TEMP: '/temp',
+  PRIVATE: '/private'
+} as const
+
+// Use in your handlers
+await storeFileLocally(file, 8, STORAGE_FOLDERS.IMAGES)
+await storeFileLocally(file, 8, STORAGE_FOLDERS.DOCUMENTS)
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Use environment variables">
+    Always use environment variables for the mount path to support different environments:
+    
+    ```ts
+    fileStorage: {
+      mount: process.env.FILE_STORAGE_MOUNT
+    }
+    ```
+  </Step>
+  
+  <Step title="Create storage directory during setup">
+    Include directory creation in your deployment scripts:
+    
+    ```bash
+    mkdir -p /var/www/storage
+    chown appuser:appuser /var/www/storage
+    ```
+  </Step>
+  
+  <Step title="Add .gitignore entry">
+    Don't commit uploaded files to version control:
+    
+    ```gitignore .gitignore
+    # Storage directory
+    storage/
+    
+    # But keep the directory structure
+    !storage/.gitkeep
+    ```
+  </Step>
+  
+  <Step title="Set up backups">
+    Regularly backup your storage directory:
+    
+    ```bash
+    # Example backup script
+    tar -czf storage-backup-$(date +%Y%m%d).tar.gz /var/www/storage
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="File Upload" icon="upload" href="/guides/file-upload">
+    Start uploading files with your configured storage
+  </Card>
+  <Card title="File Management" icon="folder" href="/guides/file-management">
+    Learn how to manage stored files
+  </Card>
+</CardGroup>

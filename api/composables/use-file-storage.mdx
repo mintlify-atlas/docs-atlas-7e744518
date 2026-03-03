@@ -1,0 +1,244 @@
+---
+title: useFileStorage
+description: Handle file input from users and prepare files for upload to the backend
+---
+
+## Overview
+
+The `useFileStorage` composable provides a simple way to handle file uploads in your Nuxt application. It processes files from HTML file inputs, serializes them with their content as base64 data URLs, and makes them ready to send to your backend API.
+
+## Function Signature
+
+```typescript
+function useFileStorage(options?: Options): {
+  files: Ref<ClientFile[]>
+  handleFileInput: (event: any) => Promise<void>
+  clearFiles: () => void
+}
+```
+
+## Parameters
+
+<ParamField path="options" type="Options" default="{ clearOldFiles: true }">
+  Configuration options for the file storage behavior.
+
+  <ParamField path="options.clearOldFiles" type="boolean" default="true">
+    When `true`, automatically clears previously stored files when new files are added. When `false`, new files are appended to the existing files array.
+  </ParamField>
+</ParamField>
+
+## Return Value
+
+<ResponseField name="files" type="Ref<ClientFile[]>">
+  A Vue ref containing an array of processed files. Each file includes the original file properties plus the base64-encoded content.
+
+  ### ClientFile Type
+
+  ```typescript
+  interface ClientFile extends Blob {
+    content: string | ArrayBuffer | null | undefined
+    name: string
+    lastModified: number
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="handleFileInput" type="(event: any) => Promise<void>">
+  An async function to handle file input events. Pass this directly to the `@input` event of your file input element. The function:
+  - Accepts an input event containing selected files
+  - Clears old files if `clearOldFiles` is `true`
+  - Reads and serializes all files as base64 data URLs
+  - Returns a promise that resolves when all files are processed
+</ResponseField>
+
+<ResponseField name="clearFiles" type="() => void">
+  A function to manually clear all files from the `files` array.
+</ResponseField>
+
+## Usage
+
+### Basic Example
+
+<Tabs>
+  <Tab title="Single File Input">
+    ```vue
+    <template>
+      <div>
+        <input type="file" @input="handleFileInput" />
+        <button @click="submit">Upload</button>
+      </div>
+    </template>
+
+    <script setup>
+    const { handleFileInput, files } = useFileStorage()
+
+    const submit = async () => {
+      const response = await $fetch('/api/files', {
+        method: 'POST',
+        body: {
+          files: files.value
+        }
+      })
+    }
+    </script>
+    ```
+  </Tab>
+
+  <Tab title="Multiple Files">
+    ```vue
+    <template>
+      <input type="file" multiple @input="handleFileInput" />
+    </template>
+
+    <script setup>
+    const { handleFileInput, files } = useFileStorage()
+
+    // files.value will contain all selected files
+    watch(files, (newFiles) => {
+      console.log(`${newFiles.length} files selected`)
+    })
+    </script>
+    ```
+  </Tab>
+
+  <Tab title="Preserve Old Files">
+    ```vue
+    <template>
+      <div>
+        <input type="file" @input="handleFileInput" />
+        <p>Total files: {{ files.length }}</p>
+        <button @click="clearFiles">Clear All</button>
+      </div>
+    </template>
+
+    <script setup>
+    // Append new files instead of replacing
+    const { handleFileInput, files, clearFiles } = useFileStorage({ 
+      clearOldFiles: false 
+    })
+    </script>
+    ```
+  </Tab>
+</Tabs>
+
+### Multiple File Input Fields
+
+When working with multiple file input fields, create a separate instance of `useFileStorage` for each input to keep their state isolated.
+
+```vue
+<template>
+  <div>
+    <input type="file" @input="handleFileInput" multiple />
+    <input type="file" @input="profileInputHandler" />
+    
+    <button @click="submit">Upload All</button>
+  </div>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+
+const {
+  handleFileInput: profileInputHandler,
+  files: profileImage
+} = useFileStorage()
+
+const submit = async () => {
+  await $fetch('/api/files', {
+    method: 'POST',
+    body: {
+      documents: files.value,
+      profile: profileImage.value
+    }
+  })
+}
+</script>
+```
+
+### Waiting for File Processing
+
+The `handleFileInput` function returns a promise, allowing you to wait for file processing to complete:
+
+```vue
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+
+const onFileChange = async (event) => {
+  await handleFileInput(event)
+  
+  // Files are now processed and ready
+  console.log('Files ready:', files.value)
+}
+</script>
+```
+
+## Notes
+
+<Note>
+  All files are read and converted to base64 data URLs automatically. This means the `content` property of each file will contain the full file data, which may result in large payloads for big files.
+</Note>
+
+<Tip>
+  When sending files to your backend, use the `ServerFile` type to properly type the received data:
+
+  ```typescript
+  import { ServerFile } from "#file-storage/types"
+
+  export default defineEventHandler(async (event) => {
+    const { files } = await readBody<{ files: ServerFile[] }>(event)
+    // Process files...
+  })
+  ```
+</Tip>
+
+<Warning>
+  By default, `clearOldFiles` is set to `true`, which means selecting new files will clear any previously selected files. Set it to `false` if you want to accumulate files across multiple selections.
+</Warning>
+
+## Best Practices
+
+1. **Single vs Multiple Instances**: Create separate `useFileStorage` instances for each file input field to avoid state conflicts.
+
+2. **Memory Considerations**: Since files are base64 encoded, they will be roughly 33% larger in memory. Consider file size limits for large uploads.
+
+3. **Error Handling**: Wrap your upload logic in try-catch blocks to handle potential errors during file reading or upload.
+
+```vue
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+
+const submit = async () => {
+  try {
+    await $fetch('/api/files', {
+      method: 'POST',
+      body: { files: files.value }
+    })
+  } catch (error) {
+    console.error('Upload failed:', error)
+  }
+}
+</script>
+```
+
+4. **Clear After Upload**: Clear files after successful upload to free memory:
+
+```vue
+<script setup>
+const { handleFileInput, files, clearFiles } = useFileStorage()
+
+const submit = async () => {
+  await $fetch('/api/files', {
+    method: 'POST',
+    body: { files: files.value }
+  })
+  
+  clearFiles() // Free memory
+}
+</script>
+```
+
+## See Also
+
+- [storeFileLocally](/api/server/store-file-locally) - Store uploaded files on the server
+- [ServerFile Type](/api/types/server-file) - Type definition for files received on the server
+- [ClientFile Type](/api/types/client-file) - Type definition for files on the client

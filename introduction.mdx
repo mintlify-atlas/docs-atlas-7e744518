@@ -1,0 +1,99 @@
+---
+title: Introduction
+description: Easy solution to store files in your Nuxt apps. Upload files from the frontend and securely save them in your backend.
+---
+
+# Nuxt File Storage
+
+Nuxt File Storage is a comprehensive file handling module for Nuxt applications that provides a complete solution for uploading, serializing, and storing files with built-in security features.
+
+## What is Nuxt File Storage?
+
+Nuxt File Storage bridges the gap between frontend file selection and backend file storage in Nuxt applications. It provides a **two-part architecture**:
+
+1. **Frontend Composable** (`useFileStorage`) - Handles file input events and serializes files into a format ready for transmission
+2. **Backend Utilities** - Provides secure server-side functions to store, retrieve, and manage files with built-in path traversal protection
+
+This architecture ensures files are properly serialized on the client, safely transmitted to the server, and securely stored in your designated location.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Frontend File Handling" icon="upload">
+    Simple composable for handling file inputs with automatic serialization to base64 data URLs
+  </Card>
+  
+  <Card title="Secure Backend Storage" icon="shield">
+    Store files in your Nuxt backend with the Nitro engine, with configurable mount points
+  </Card>
+  
+  <Card title="Path Traversal Protection" icon="lock">
+    Built-in security features prevent directory traversal attacks and ensure files stay within configured boundaries
+  </Card>
+  
+  <Card title="File Serialization" icon="code">
+    Automatic conversion between client File objects and server-side data URLs with proper MIME type handling
+  </Card>
+  
+  <Card title="Streaming Support" icon="stream">
+    Retrieve files as Node.js readable streams for efficient file delivery with proper content headers
+  </Card>
+  
+  <Card title="TypeScript Support" icon="code">
+    Full TypeScript support with proper type definitions for ServerFile and ClientFile
+  </Card>
+</CardGroup>
+
+## Quick Links
+
+<CardGroup cols={3}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running with a complete example in minutes
+  </Card>
+  
+  <Card title="Installation" icon="download" href="/installation">
+    Install and configure the module in your Nuxt project
+  </Card>
+  
+  <Card title="API Reference" icon="book" href="/api/composables/use-file-storage">
+    Explore all available functions and composables
+  </Card>
+</CardGroup>
+
+## How It Works
+
+The module provides a seamless workflow:
+
+<Steps>
+  <Step title="Select Files">
+    Use the `useFileStorage` composable in your Vue components to handle file input events
+  </Step>
+  
+  <Step title="Automatic Serialization">
+    Files are automatically serialized to base64 data URLs with metadata (name, size, type, lastModified)
+  </Step>
+  
+  <Step title="Send to Backend">
+    Use `$fetch` to send the serialized files to your Nuxt API routes
+  </Step>
+  
+  <Step title="Store Securely">
+    Use `storeFileLocally` in your API routes to save files with automatic path validation
+  </Step>
+</Steps>
+
+<Note>
+  Nuxt File Storage handles all the complexity of file serialization, transfer, and storage so you can focus on building your application.
+</Note>
+
+## Use Cases
+
+- User avatar uploads
+- Document management systems
+- Image galleries
+- File sharing applications
+- Any scenario requiring secure file storage in a Nuxt application
+
+## Next Steps
+
+Ready to get started? Check out the [Installation Guide](/installation) to add Nuxt File Storage to your project, or jump straight to the [Quickstart Guide](/quickstart) to see it in action.

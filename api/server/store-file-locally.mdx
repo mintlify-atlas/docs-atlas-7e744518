@@ -1,0 +1,229 @@
+---
+title: storeFileLocally
+description: Store a file in the specified directory with automatic extension handling and unique ID generation
+---
+
+## Function Signature
+
+```typescript
+storeFileLocally(
+  file: ServerFile,
+  fileNameOrIdLength: string | number,
+  filelocation?: string
+): Promise<string>
+```
+
+## Description
+
+Stores a file in the specified directory on the server. The function handles file extension extraction, directory creation, and path safety validation automatically.
+
+## Parameters
+
+<ParamField path="file" type="ServerFile" required>
+  The file object to store. Must contain:
+  - `name`: string - Original filename
+  - `content`: string - Data URL with base64-encoded file content
+  - `size`: string - File size
+  - `type`: string - MIME type
+  - `lastModified`: string - Last modified timestamp
+</ParamField>
+
+<ParamField path="fileNameOrIdLength" type="string | number" required>
+  Controls the filename of the stored file:
+  
+  **When a number:**
+  - Generates a unique random ID with the specified length
+  - Automatically appends the correct file extension
+  - Example: `8` generates something like `aBcD1234.png`
+  
+  **When a string:**
+  - Uses the provided string as the filename
+  - If no extension is provided, automatically appends the correct one
+  - If the extension matches the file type, uses as-is
+  - If the extension doesn't match, warns and replaces with correct extension
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  The folder path where the file should be stored, relative to the configured mount point.
+  - Use forward slashes for subdirectories (e.g., `/userFiles` or `/uploads/images`)
+  - Defaults to the root of the mount directory if not provided
+  - Path is automatically normalized and validated for security
+</ParamField>
+
+## Return Value
+
+<ResponseField name="filename" type="Promise<string>">
+  Returns the final filename of the stored file in the format `{filename}.{extension}`
+</ResponseField>
+
+## Behavior Details
+
+### File Extension Handling
+
+The function intelligently handles file extensions:
+
+1. **Extracts extension from original filename** if it contains a dot
+2. **Falls back to MIME type** if no extension in filename
+3. **Sanitizes extension** by removing non-alphanumeric characters
+4. **Automatically appends or corrects** the extension based on the parameter type
+
+### Filename Generation
+
+**Using a number (recommended for user uploads):**
+```typescript
+const filename = await storeFileLocally(file, 8, '/userFiles')
+// Returns: "aBcD1234.png" (8 random characters + extension)
+```
+
+**Using a string without extension:**
+```typescript
+const filename = await storeFileLocally(file, 'avatar', '/userFiles')
+// Returns: "avatar.png" (extension auto-appended)
+```
+
+**Using a string with correct extension:**
+```typescript
+const filename = await storeFileLocally(file, 'avatar.png', '/userFiles')
+// Returns: "avatar.png" (used as-is)
+```
+
+**Using a string with wrong extension:**
+```typescript
+const filename = await storeFileLocally(file, 'avatar.jpg', '/userFiles')
+// Console warning issued
+// Returns: "avatar.png" (extension corrected to match actual file type)
+```
+
+### Directory Creation
+
+The function automatically:
+- Creates the target directory if it doesn't exist (recursive creation)
+- Validates that the path is within the configured mount point
+- Prevents path traversal attacks
+- Provides detailed error messages for EEXIST and ENOTDIR errors
+
+## Examples
+
+### Basic Usage with Auto-Generated Filename
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  // Store with 8-character random ID
+  const filename = await storeFileLocally(file, 8, '/userFiles')
+  
+  return { filename } // e.g., { filename: "aBcD1234.png" }
+})
+```
+
+### Multiple File Upload
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  const storedFiles = []
+  
+  for (const file of files) {
+    const filename = await storeFileLocally(file, 12, '/uploads')
+    storedFiles.push(filename)
+  }
+  
+  return { files: storedFiles }
+})
+```
+
+### Custom Filename
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { file, userId } = await readBody<{ file: ServerFile; userId: string }>(event)
+  
+  // Store with custom name based on user ID
+  const filename = await storeFileLocally(
+    file,
+    `user-${userId}-avatar`,
+    '/avatars'
+  )
+  
+  return { filename } // e.g., { filename: "user-123-avatar.png" }
+})
+```
+
+### Organized Storage Structure
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { file, category } = await readBody<{ 
+    file: ServerFile
+    category: string 
+  }>(event)
+  
+  // Store in category-specific subdirectory
+  const filename = await storeFileLocally(
+    file,
+    16,
+    `/uploads/${category}`
+  )
+  
+  return { 
+    filename,
+    path: `/uploads/${category}/${filename}`
+  }
+})
+```
+
+## Error Handling
+
+<Warning>
+  The function throws an error if `fileStorage.mount` is not configured in your Nuxt config.
+</Warning>
+
+```typescript
+export default defineEventHandler(async (event) => {
+  try {
+    const { file } = await readBody<{ file: ServerFile }>(event)
+    const filename = await storeFileLocally(file, 8, '/userFiles')
+    return { success: true, filename }
+  } catch (error) {
+    console.error('File storage error:', error)
+    return { success: false, error: error.message }
+  }
+})
+```
+
+## Common Errors
+
+**Mount not configured:**
+```
+Error: fileStorage.mount is not configured
+```
+Solution: Add `fileStorage.mount` to your `nuxt.config.ts`
+
+**EEXIST - File exists where directory expected:**
+```
+EEXIST: A file already exists at "{path}" where a directory was expected
+```
+Solution: Remove or rename the conflicting file
+
+**ENOTDIR - Parent path is a file:**
+```
+ENOTDIR: Cannot create directory "{path}" because a parent path component is a file
+```
+Solution: Check if any part of the path exists as a file instead of a folder
+
+## See Also
+
+- [parseDataUrl](/api/server/parse-data-url) - Extract binary data and extension from data URLs
+- [getFileLocally](/api/server/get-file-locally) - Get the file path of a stored file
+- [deleteFile](/api/server/delete-file) - Delete a stored file
+- [retrieveFileLocally](/api/server/retrieve-file-locally) - Stream a file to the client
+
+## Source
+
+View the [source code](https://github.com/NyllRE/nuxt-file-storage/blob/main/src/runtime/server/utils/storage.ts#L43-L114) on GitHub.

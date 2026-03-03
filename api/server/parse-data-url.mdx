@@ -1,0 +1,394 @@
+---
+title: parseDataUrl
+description: Parse a data URL and extract binary data with file extension from MIME type
+---
+
+## Function Signature
+
+```typescript
+parseDataUrl(
+  file: string
+): { binaryString: Buffer; ext: string }
+```
+
+## Description
+
+Parses a data URL (base64-encoded string with MIME type) and returns an object containing the binary data as a Buffer and the file extension extracted from the MIME type.
+
+This function is used internally by `storeFileLocally` but can also be used standalone when you need to process file data without storing it immediately.
+
+## Parameters
+
+<ParamField path="file" type="string" required>
+  A data URL string in the format: `data:{mimeType};base64,{base64Data}`
+  
+  Example: `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA...`
+  
+  - Must include the MIME type (e.g., `image/png`, `application/pdf`)
+  - Must be base64-encoded
+  - Follows the standard data URL format
+</ParamField>
+
+## Return Value
+
+<ResponseField name="return" type="{ binaryString: Buffer; ext: string }">
+  An object with two properties:
+</ResponseField>
+
+<ResponseField name="binaryString" type="Buffer">
+  The decoded binary data as a Node.js Buffer. This can be used with Node.js file system functions or other binary operations.
+</ResponseField>
+
+<ResponseField name="ext" type="string">
+  The file extension extracted from the MIME type.
+  
+  Examples:
+  - `image/png` → `"png"`
+  - `image/jpeg` → `"jpeg"`
+  - `application/pdf` → `"pdf"`
+  - `text/plain` → `"plain"`
+</ResponseField>
+
+## How it Works
+
+1. **Splits the data URL** at the comma separator to separate metadata from content
+2. **Extracts MIME type** using regex from the first part (e.g., `data:image/png;base64`)
+3. **Decodes base64** string from the second part into a Buffer
+4. **Extracts extension** from the MIME type by taking the part after the `/`
+
+<Note>
+  The function extracts the extension directly from the MIME type. For example, `image/jpeg` becomes `"jpeg"`, not `"jpg"`. You may need to normalize this in your application if you prefer specific extensions.
+</Note>
+
+## Examples
+
+### Basic Usage
+
+```typescript
+const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA...'
+
+const { binaryString, ext } = parseDataUrl(dataUrl)
+
+console.log(ext) // "png"
+console.log(binaryString instanceof Buffer) // true
+```
+
+### Extract File Data from ServerFile
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString, ext } = parseDataUrl(file.content)
+  
+  return {
+    extension: ext,
+    size: binaryString.length,
+    type: file.type
+  }
+})
+```
+
+### Custom File Processing
+
+```typescript
+import { writeFile } from 'fs/promises'
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString, ext } = parseDataUrl(file.content)
+  
+  // Custom file processing before storage
+  const customPath = `/custom/path/myfile.${ext}`
+  await writeFile(customPath, binaryString)
+  
+  return { path: customPath }
+})
+```
+
+### Image Processing
+
+```typescript
+import sharp from 'sharp'
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString, ext } = parseDataUrl(file.content)
+  
+  // Process image with sharp
+  const thumbnail = await sharp(binaryString)
+    .resize(200, 200)
+    .toBuffer()
+  
+  // Store thumbnail
+  const thumbnailDataUrl = `data:image/${ext};base64,${thumbnail.toString('base64')}`
+  const thumbnailFile: ServerFile = {
+    ...file,
+    content: thumbnailDataUrl
+  }
+  
+  const filename = await storeFileLocally(thumbnailFile, 8, '/thumbnails')
+  
+  return { thumbnail: filename }
+})
+```
+
+### Validate File Type
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString, ext } = parseDataUrl(file.content)
+  
+  // Validate file type
+  if (!ALLOWED_EXTENSIONS.includes(ext.toLowerCase())) {
+    throw createError({
+      statusCode: 400,
+      message: `File type .${ext} not allowed. Allowed types: ${ALLOWED_EXTENSIONS.join(', ')}`
+    })
+  }
+  
+  // Proceed with storage
+  const filename = await storeFileLocally(file, 8, '/images')
+  
+  return { filename, ext }
+})
+```
+
+### Get File Hash
+
+```typescript
+import crypto from 'crypto'
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString, ext } = parseDataUrl(file.content)
+  
+  // Generate hash of file content
+  const hash = crypto
+    .createHash('sha256')
+    .update(binaryString)
+    .digest('hex')
+  
+  return {
+    hash,
+    extension: ext,
+    size: binaryString.length
+  }
+})
+```
+
+### Virus Scanning Before Storage
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+// Assuming you have a virus scanning library
+import { scanBuffer } from 'some-antivirus-lib'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString, ext } = parseDataUrl(file.content)
+  
+  // Scan for viruses
+  const scanResult = await scanBuffer(binaryString)
+  
+  if (scanResult.infected) {
+    throw createError({
+      statusCode: 400,
+      message: 'File contains malicious content'
+    })
+  }
+  
+  // Safe to store
+  const filename = await storeFileLocally(file, 12, '/uploads')
+  
+  return { filename, scanned: true }
+})
+```
+
+### Convert Image Format
+
+```typescript
+import sharp from 'sharp'
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString } = parseDataUrl(file.content)
+  
+  // Convert all images to WebP format
+  const webpBuffer = await sharp(binaryString)
+    .webp({ quality: 90 })
+    .toBuffer()
+  
+  // Create new ServerFile with WebP data
+  const webpFile: ServerFile = {
+    name: file.name.replace(/\.[^.]+$/, '.webp'),
+    content: `data:image/webp;base64,${webpBuffer.toString('base64')}`,
+    size: webpBuffer.length.toString(),
+    type: 'image/webp',
+    lastModified: file.lastModified
+  }
+  
+  const filename = await storeFileLocally(webpFile, 8, '/images')
+  
+  return { filename, format: 'webp' }
+})
+```
+
+### Multiple File Processing
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  const processedFiles = files.map(file => {
+    const { binaryString, ext } = parseDataUrl(file.content)
+    
+    return {
+      originalName: file.name,
+      extension: ext,
+      size: binaryString.length,
+      mimeType: file.type
+    }
+  })
+  
+  return { files: processedFiles }
+})
+```
+
+### Extract Metadata Without Storing
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  const { binaryString, ext } = parseDataUrl(file.content)
+  
+  // Extract metadata without storing the file
+  return {
+    filename: file.name,
+    extension: ext,
+    size: binaryString.length,
+    sizeKB: (binaryString.length / 1024).toFixed(2),
+    sizeMB: (binaryString.length / 1024 / 1024).toFixed(2),
+    mimeType: file.type,
+    lastModified: file.lastModified
+  }
+})
+```
+
+## Error Handling
+
+<Warning>
+  The function throws an error if the data URL is invalid or doesn't contain a valid MIME type.
+</Warning>
+
+```typescript
+try {
+  const { binaryString, ext } = parseDataUrl(invalidDataUrl)
+} catch (error) {
+  console.error('Invalid data URL:', error.message)
+  // Error: Invalid data URL
+}
+```
+
+### Robust Error Handling
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  try {
+    const { binaryString, ext } = parseDataUrl(file.content)
+    
+    return {
+      success: true,
+      extension: ext,
+      size: binaryString.length
+    }
+  } catch (error) {
+    throw createError({
+      statusCode: 400,
+      message: 'Invalid file data URL format'
+    })
+  }
+})
+```
+
+## Common Errors
+
+**Invalid data URL:**
+```
+Error: Invalid data URL
+```
+Solution: Ensure the file content is a properly formatted data URL with MIME type
+
+**Missing MIME type:**
+```
+Error: Invalid data URL
+```
+Solution: The data URL must include a MIME type (e.g., `data:image/png;base64,...`)
+
+## Data URL Format
+
+Valid data URLs follow this format:
+```
+data:[<mediatype>][;base64],<data>
+```
+
+Examples:
+- `data:image/png;base64,iVBORw0KGgo...`
+- `data:application/pdf;base64,JVBERi0x...`
+- `data:text/plain;base64,SGVsbG8gV29...`
+
+<Note>
+  The `ServerFile` type automatically provides file content in the correct data URL format when using the `useFileStorage` composable on the frontend.
+</Note>
+
+## Use Cases
+
+- **File validation** - Check file type before storage
+- **Custom storage** - Implement your own storage logic
+- **File processing** - Process files before storing (resize, convert, etc.)
+- **Metadata extraction** - Get file information without storing
+- **Content analysis** - Analyze file content for security or quality
+- **Format conversion** - Convert files to different formats
+- **Multiple destinations** - Store the same file in multiple locations
+- **Virus scanning** - Scan file content before storage
+
+## Performance Considerations
+
+<Tip>
+  The function decodes the entire file into memory as a Buffer. For very large files, this could consume significant memory. Consider streaming approaches for files larger than 10-20MB.
+</Tip>
+
+## See Also
+
+- [storeFileLocally](/api/server/store-file-locally) - Uses parseDataUrl internally to store files
+- [ServerFile Type](/api/types/server-file) - The type definition for server-side file objects
+
+## Source
+
+View the [source code](https://github.com/NyllRE/nuxt-file-storage/blob/main/src/runtime/server/utils/storage.ts#L195-L208) on GitHub.

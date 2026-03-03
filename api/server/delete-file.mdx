@@ -1,0 +1,429 @@
+---
+title: deleteFile
+description: Delete a file from the configured storage directory
+---
+
+## Function Signature
+
+```typescript
+deleteFile(
+  filename: string,
+  filelocation?: string
+): Promise<void>
+```
+
+## Description
+
+Deletes a file from the specified directory in the configured file storage mount. The function validates the file path to prevent directory traversal attacks before deletion.
+
+## Parameters
+
+<ParamField path="filename" type="string" required>
+  The name of the file to delete. This should be the filename returned by `storeFileLocally`.
+  - Must be a safe basename (no path separators)
+  - Example: `"aBcD1234.png"`
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  The folder path where the file is located, relative to the configured mount point.
+  - Use forward slashes for subdirectories (e.g., `/userFiles` or `/uploads/images`)
+  - Defaults to the root of the mount directory if not provided
+  - Path is automatically normalized and validated for security
+</ParamField>
+
+## Return Value
+
+<ResponseField name="void" type="Promise<void>">
+  The function returns a Promise that resolves when the file is successfully deleted. It does not return any value.
+</ResponseField>
+
+## Behavior Details
+
+### Path Validation
+
+Before deletion, the function:
+1. Validates the filename is a safe basename
+2. Normalizes the file location path
+3. Ensures the target path is within the configured mount directory
+4. Prevents directory traversal attacks
+
+<Warning>
+  If the file doesn't exist, the function will throw an error. Consider wrapping the call in a try-catch block if you're not certain the file exists.
+</Warning>
+
+### Security
+
+<Note>
+  The function includes built-in security measures to prevent:
+  - Directory traversal attacks
+  - Deletion of files outside the mount directory
+  - Path manipulation attempts
+</Note>
+
+## Examples
+
+### Basic File Deletion
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = await readBody(event)
+  
+  await deleteFile(filename, '/userFiles')
+  
+  return { success: true, message: 'File deleted successfully' }
+})
+```
+
+### Delete with Error Handling
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = await readBody(event)
+  
+  try {
+    await deleteFile(filename, '/uploads')
+    return { success: true }
+  } catch (error) {
+    console.error('File deletion failed:', error)
+    return { success: false, error: 'Failed to delete file' }
+  }
+})
+```
+
+### Delete Old File When Uploading New One
+
+```typescript
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { file, oldFilename } = await readBody<{
+    file: ServerFile
+    oldFilename?: string
+  }>(event)
+  
+  // Store the new file
+  const newFilename = await storeFileLocally(file, 8, '/avatars')
+  
+  // Delete the old file if it exists
+  if (oldFilename) {
+    try {
+      await deleteFile(oldFilename, '/avatars')
+    } catch (error) {
+      console.warn('Could not delete old file:', oldFilename)
+      // Continue even if old file deletion fails
+    }
+  }
+  
+  return { filename: newFilename }
+})
+```
+
+### User Profile Picture Update
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const userId = event.context.user?.id
+  if (!userId) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+  
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  // Get current avatar from database
+  const user = await db.users.findById(userId)
+  
+  // Store new avatar
+  const newAvatar = await storeFileLocally(
+    file,
+    `user-${userId}-avatar`,
+    '/avatars'
+  )
+  
+  // Delete old avatar if it exists
+  if (user.avatarFilename) {
+    await deleteFile(user.avatarFilename, '/avatars').catch(() => {})
+  }
+  
+  // Update database
+  await db.users.update(userId, { avatarFilename: newAvatar })
+  
+  return { avatarFilename: newAvatar }
+})
+```
+
+### Bulk File Deletion
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filenames } = await readBody<{ filenames: string[] }>(event)
+  
+  const results = await Promise.allSettled(
+    filenames.map(filename => deleteFile(filename, '/uploads'))
+  )
+  
+  const deleted = results.filter(r => r.status === 'fulfilled').length
+  const failed = results.filter(r => r.status === 'rejected').length
+  
+  return {
+    deleted,
+    failed,
+    total: filenames.length
+  }
+})
+```
+
+### Cleanup Old Files
+
+```typescript
+import { stat } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/temp')
+  const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000)
+  
+  let deletedCount = 0
+  
+  for (const filename of files) {
+    try {
+      const filePath = getFileLocally(filename, '/temp')
+      const stats = await stat(filePath)
+      
+      // Delete files older than 30 days
+      if (stats.mtime.getTime() < thirtyDaysAgo) {
+        await deleteFile(filename, '/temp')
+        deletedCount++
+      }
+    } catch (error) {
+      console.error(`Failed to process file ${filename}:`, error)
+    }
+  }
+  
+  return { deletedCount }
+})
+```
+
+### Delete with Authorization
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const userId = event.context.user?.id
+  const { filename } = await readBody(event)
+  
+  if (!userId) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+  
+  // Verify the file belongs to the user
+  const file = await db.files.findOne({ filename, userId })
+  if (!file) {
+    throw createError({ 
+      statusCode: 403, 
+      message: 'You do not have permission to delete this file' 
+    })
+  }
+  
+  // Delete the file
+  await deleteFile(filename, '/userFiles')
+  
+  // Remove from database
+  await db.files.delete(file.id)
+  
+  return { success: true }
+})
+```
+
+### Transaction-Safe Deletion
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { fileId } = await readBody(event)
+  
+  // Start database transaction
+  const transaction = await db.startTransaction()
+  
+  try {
+    // Get file info from database
+    const file = await db.files.findById(fileId, { transaction })
+    if (!file) {
+      throw new Error('File not found in database')
+    }
+    
+    // Delete from filesystem
+    await deleteFile(file.filename, file.location)
+    
+    // Delete from database
+    await db.files.delete(fileId, { transaction })
+    
+    // Commit transaction
+    await transaction.commit()
+    
+    return { success: true }
+  } catch (error) {
+    // Rollback on error
+    await transaction.rollback()
+    throw createError({
+      statusCode: 500,
+      message: 'Failed to delete file'
+    })
+  }
+})
+```
+
+### Delete All User Files
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { userId } = await readBody(event)
+  
+  // Verify admin permissions
+  if (!event.context.user?.isAdmin) {
+    throw createError({ statusCode: 403, message: 'Forbidden' })
+  }
+  
+  // Get all files for the user
+  const userFiles = await getFilesLocally(`/users/${userId}`)
+  
+  // Delete each file
+  for (const filename of userFiles) {
+    try {
+      await deleteFile(filename, `/users/${userId}`)
+    } catch (error) {
+      console.error(`Failed to delete ${filename}:`, error)
+    }
+  }
+  
+  return { 
+    deletedCount: userFiles.length,
+    userId 
+  }
+})
+```
+
+### Safe Delete with Backup
+
+```typescript
+import { copyFile } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const { filename } = await readBody(event)
+  
+  const filePath = getFileLocally(filename, '/uploads')
+  const backupPath = getFileLocally(filename, '/backups')
+  
+  try {
+    // Create backup before deletion
+    await copyFile(filePath, backupPath)
+    
+    // Delete original
+    await deleteFile(filename, '/uploads')
+    
+    return { 
+      success: true, 
+      backed_up: true,
+      backup_location: '/backups'
+    }
+  } catch (error) {
+    throw createError({
+      statusCode: 500,
+      message: 'Failed to delete file'
+    })
+  }
+})
+```
+
+## Error Handling
+
+<Warning>
+  The function throws an error if `fileStorage.mount` is not configured in your Nuxt config.
+</Warning>
+
+### Common Errors
+
+**Mount not configured:**
+```
+Error: fileStorage.mount is not configured
+```
+Solution: Add `fileStorage.mount` to your `nuxt.config.ts`
+
+**File not found:**
+```
+Errno: -2
+Code: ENOENT
+```
+Solution: Verify the file exists before attempting deletion
+
+**Permission denied:**
+```
+Errno: -13
+Code: EACCES
+```
+Solution: Check file system permissions on the mount directory
+
+### Robust Error Handling
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = await readBody(event)
+  
+  try {
+    await deleteFile(filename, '/uploads')
+    return { success: true }
+  } catch (error: any) {
+    // Handle specific error codes
+    if (error.code === 'ENOENT') {
+      return { 
+        success: false, 
+        error: 'File not found' 
+      }
+    }
+    if (error.code === 'EACCES') {
+      throw createError({
+        statusCode: 500,
+        message: 'Permission denied'
+      })
+    }
+    // Re-throw unexpected errors
+    throw error
+  }
+})
+```
+
+## Use Cases
+
+- **File replacement** - Delete old files when users upload new ones
+- **Cleanup tasks** - Remove temporary or expired files
+- **User actions** - Allow users to delete their uploaded files
+- **Storage management** - Free up space by removing unused files
+- **Account deletion** - Remove all files when deleting user accounts
+- **Error recovery** - Clean up partially uploaded files
+- **Cache invalidation** - Remove cached or generated files
+
+## Important Notes
+
+<Warning>
+  **Deletion is permanent!** There is no built-in recovery mechanism. Consider implementing:
+  - Soft deletes (mark as deleted in database)
+  - Backup mechanisms before deletion
+  - Trash/recycle bin functionality
+  - Confirmation prompts on the frontend
+</Warning>
+
+<Tip>
+  For production applications, consider:
+  - Logging all deletions for audit trails
+  - Implementing soft deletes for important files
+  - Adding deletion permissions/authorization
+  - Backing up files before deletion
+  - Using transaction-safe patterns when deleting from database and filesystem
+</Tip>
+
+## See Also
+
+- [storeFileLocally](/api/server/store-file-locally) - Store files that can be deleted later
+- [getFileLocally](/api/server/get-file-locally) - Get file path before deletion
+- [getFilesLocally](/api/server/get-files-locally) - List files to find candidates for deletion
+- [retrieveFileLocally](/api/server/retrieve-file-locally) - Retrieve file before deletion
+
+## Source
+
+View the [source code](https://github.com/NyllRE/nuxt-file-storage/blob/main/src/runtime/server/utils/storage.ts#L162-L169) on GitHub.

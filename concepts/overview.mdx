@@ -1,0 +1,324 @@
+---
+title: Architecture Overview
+description: Understanding how nuxt-file-storage integrates frontend and backend file handling
+---
+
+## How the Module Works
+
+nuxt-file-storage provides a complete solution for file handling in Nuxt applications by bridging the gap between frontend file inputs and backend storage. The module consists of two main parts that work together:
+
+1. **Frontend Composable** (`useFileStorage`) - Handles file input processing and serialization
+2. **Backend Server Utilities** - Manages secure file storage and retrieval
+
+<Info>
+The module leverages Nuxt's module system and Nitro's server engine to provide seamless integration between client and server.
+</Info>
+
+## File Flow Architecture
+
+The complete journey of a file through the system follows this flow:
+
+```mermaid
+graph LR
+    A[File Input] --> B[handleFileInput]
+    B --> C[Serialization to Data URL]
+    C --> D[Files Ref Array]
+    D --> E[HTTP Request]
+    E --> F[Backend API Route]
+    F --> G[ServerFile Object]
+    G --> H[storeFileLocally]
+    H --> I[File System Storage]
+```
+
+### 1. Client Input
+
+When a user selects files through an `<input type="file">` element, the browser provides a `FileList` object containing native `File` objects.
+
+### 2. Serialization
+
+The `useFileStorage` composable processes each file:
+
+```ts
+// From useFileStorage.ts:10-28
+const serializeFile = (file: ClientFile): Promise<void> => {
+  return new Promise<void>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e: ProgressEvent<FileReader>) => {
+      files.value.push({
+        ...file,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified,
+        content: e.target?.result, // Base64 data URL
+      })
+      resolve()
+    }
+    reader.onerror = (error) => reject(error)
+    reader.readAsDataURL(file)
+  })
+}
+```
+
+The `FileReader` API converts binary file data into a base64-encoded data URL format that can be safely transmitted over HTTP.
+
+### 3. Transfer
+
+The serialized files are sent to the backend as part of a request body:
+
+```ts
+const response = await $fetch('/api/files', {
+  method: 'POST',
+  body: { files: files.value }
+})
+```
+
+### 4. Backend Storage
+
+On the server, files arrive as `ServerFile` objects and are processed by utility functions:
+
+```ts
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  for (const file of files) {
+    await storeFileLocally(
+      file,        // ServerFile object
+      8,          // ID length or custom filename
+      '/uploads'  // Storage directory
+    )
+  }
+})
+```
+
+## The Role of Each API Component
+
+### Frontend Composable: `useFileStorage`
+
+**Purpose:** Simplify file input handling and prepare files for network transfer
+
+**Key responsibilities:**
+- Process `FileList` objects from file inputs
+- Serialize files to data URLs using FileReader API
+- Manage file state in a reactive Vue ref
+- Handle multiple file selections
+- Optionally clear previous selections
+
+**When to use:**
+- Any component with file input elements
+- When you need reactive file state
+- When preparing files for API requests
+
+**Example:**
+```vue
+<script setup>
+const { handleFileInput, files, clearFiles } = useFileStorage({
+  clearOldFiles: true // Clear on new selection
+})
+</script>
+```
+
+### Backend Storage Utilities
+
+**Purpose:** Securely receive, validate, and store files on the server filesystem
+
+**Key functions:**
+
+#### `storeFileLocally`
+Stores a file with automatic ID generation or custom naming
+
+```ts
+// Auto-generated filename with 8 character ID
+await storeFileLocally(file, 8, '/userFiles')
+// Returns: "a7Kj9mP2.jpg"
+
+// Custom filename
+await storeFileLocally(file, 'profile-photo', '/avatars')
+// Returns: "profile-photo.jpg"
+```
+
+#### `getFileLocally`
+Returns the absolute path to a stored file
+
+```ts
+const filePath = getFileLocally('a7Kj9mP2.jpg', '/userFiles')
+// Returns: "/home/user/storage/userFiles/a7Kj9mP2.jpg"
+```
+
+#### `retrieveFileLocally`
+Streams a file to the client with proper headers
+
+```ts
+return await retrieveFileLocally(event, 'document.pdf', '/documents')
+// Sets Content-Type, Content-Length, and streams the file
+```
+
+#### `deleteFile`
+Removes a file from storage
+
+```ts
+await deleteFile('old-file.jpg', '/temp')
+```
+
+#### `getFilesLocally`
+Lists all files in a directory
+
+```ts
+const files = await getFilesLocally('/userFiles')
+// Returns: ['file1.jpg', 'file2.pdf', 'file3.png']
+```
+
+**When to use:**
+- In API route handlers that receive files
+- When you need to manage stored files
+- When serving files to clients
+- When implementing file galleries or listings
+
+## Configuration Requirements
+
+Before using the backend utilities, you must configure the storage mount point:
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  fileStorage: {
+    mount: '/absolute/path/to/storage'
+  }
+})
+```
+
+<Warning>
+The mount path must be an absolute path. All file operations are contained within this directory for security.
+</Warning>
+
+**Using environment variables (recommended):**
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  fileStorage: {
+    mount: process.env.FILE_STORAGE_MOUNT
+  }
+})
+```
+
+```bash
+# .env
+FILE_STORAGE_MOUNT=/home/user/project/storage
+```
+
+## When to Use Each Part of the API
+
+### Use Frontend Composable When:
+
+- Building upload forms
+- Creating file pickers
+- Implementing drag-and-drop file zones
+- Previewing files before upload
+- Managing multiple file input fields
+
+### Use Backend Storage When:
+
+- Receiving uploaded files in API routes
+- Persisting files to the filesystem
+- Implementing file download endpoints
+- Managing file lifecycle (store, retrieve, delete)
+- Building file management systems
+
+### Use Both Together For:
+
+**Complete upload flow:**
+```vue
+<!-- Frontend -->
+<template>
+  <input type="file" @input="handleFileInput" multiple />
+  <button @click="uploadFiles">Upload</button>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+
+const uploadFiles = async () => {
+  await $fetch('/api/upload', {
+    method: 'POST',
+    body: { files: files.value }
+  })
+}
+</script>
+```
+
+```ts
+// Backend - server/api/upload.ts
+import type { ServerFile } from 'nuxt-file-storage'
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  
+  const storedFiles = []
+  for (const file of files) {
+    const filename = await storeFileLocally(file, 8, '/uploads')
+    storedFiles.push(filename)
+  }
+  
+  return { success: true, files: storedFiles }
+})
+```
+
+<Tip>
+For production applications, consider adding validation, file type checking, size limits, and user authentication to your file upload endpoints.
+</Tip>
+
+## Type Safety
+
+The module provides TypeScript types for both client and server:
+
+```ts
+// Frontend
+import type { ClientFile } from 'nuxt-file-storage'
+
+// Backend
+import type { ServerFile } from 'nuxt-file-storage'
+
+// Module configuration
+import type { ModuleOptions } from 'nuxt-file-storage'
+```
+
+**ClientFile interface:**
+```ts
+interface ClientFile extends Blob {
+  content: string | ArrayBuffer | null | undefined
+  name: string
+  lastModified: number
+}
+```
+
+**ServerFile interface:**
+```ts
+interface ServerFile {
+  name: string
+  content: string  // Base64 data URL
+  size: string
+  type: string
+  lastModified: string
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Frontend Handling" icon="browser" href="/concepts/frontend-handling">
+    Deep dive into useFileStorage and client-side file processing
+  </Card>
+  <Card title="Backend Storage" icon="server" href="/concepts/backend-storage">
+    Learn about server-side storage strategies and utilities
+  </Card>
+  <Card title="Security" icon="shield" href="/concepts/security">
+    Understand built-in security features and best practices
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/composables/use-file-storage">
+    Complete API documentation and examples
+  </Card>
+</CardGroup>

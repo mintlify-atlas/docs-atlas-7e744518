@@ -1,0 +1,548 @@
+---
+title: File Management
+description: List, organize, and delete files in your storage
+---
+
+Manage uploaded files with operations like listing all files in a directory, deleting specific files, and organizing files in subdirectories.
+
+## Listing Files
+
+Use `getFilesLocally` to retrieve all files in a directory.
+
+### Basic Usage
+
+```ts
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/userFiles')
+  // Returns: ['file1.pdf', 'file2.jpg', 'document.txt']
+  
+  return { files, count: files.length }
+})
+```
+
+### Parameters
+
+<ParamField path="filelocation" type="string" default="''">
+  The subdirectory to list files from. Leave empty for the root of the mount directory.
+</ParamField>
+
+### Return Value
+
+<ResponseField name="files" type="Promise<string[]>">
+  Array of filenames in the specified directory. Returns an empty array if the directory doesn't exist or is empty.
+</ResponseField>
+
+### Complete Example
+
+```ts server/api/files/list.ts
+export default defineEventHandler(async (event) => {
+  const { folder } = getQuery(event)
+  const folderPath = folder ? String(folder) : ''
+  
+  const files = await getFilesLocally(folderPath)
+  
+  return {
+    folder: folderPath || 'root',
+    count: files.length,
+    files: files.map(filename => ({
+      name: filename,
+      url: `/api/get/${folderPath}/${filename}`.replace('//', '/')
+    }))
+  }
+})
+```
+
+Usage:
+```ts
+// List files in root
+const { files } = await $fetch('/api/files/list')
+
+// List files in specific folder
+const { files } = await $fetch('/api/files/list?folder=/userFiles')
+```
+
+## Deleting Files
+
+Use `deleteFile` to remove files from storage.
+
+### Basic Usage
+
+```ts
+import { deleteFile } from '#file-storage/server'
+
+export default defineEventHandler(async (event) => {
+  await deleteFile('requiredFile.txt', '/userFiles')
+  
+  return { success: true }
+})
+```
+
+### Parameters
+
+<ParamField path="filename" type="string" required>
+  The name of the file to delete
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  The subdirectory where the file is located
+</ParamField>
+
+### Complete Example
+
+```ts server/api/files/delete.ts
+export default defineEventHandler(async (event) => {
+  const { filename, folder } = await readBody<{
+    filename: string
+    folder?: string
+  }>(event)
+  
+  if (!filename) {
+    throw createError({
+      statusCode: 400,
+      message: 'Filename is required'
+    })
+  }
+  
+  try {
+    await deleteFile(filename, folder || '')
+    return { 
+      success: true, 
+      message: `Deleted ${filename}` 
+    }
+  } catch (error) {
+    throw createError({
+      statusCode: 500,
+      message: 'Failed to delete file'
+    })
+  }
+})
+```
+
+Frontend usage:
+```ts
+const deleteFileHandler = async (filename: string) => {
+  await $fetch('/api/files/delete', {
+    method: 'POST',
+    body: { filename, folder: '/userFiles' }
+  })
+  console.log('File deleted')
+}
+```
+
+## Organizing Files in Subdirectories
+
+Organize files by storing them in different subdirectories based on file type, user, date, or any other criteria.
+
+### By File Type
+
+```ts server/api/upload.ts
+import { ServerFile } from "#file-storage/types"
+
+export default defineEventHandler(async (event) => {
+  const { files } = await readBody<{ files: ServerFile[] }>(event)
+  const uploaded = []
+  
+  for (const file of files) {
+    let folder = '/other'
+    
+    // Organize by MIME type
+    if (file.type.startsWith('image/')) {
+      folder = '/images'
+    } else if (file.type.startsWith('video/')) {
+      folder = '/videos'
+    } else if (file.type === 'application/pdf') {
+      folder = '/documents'
+    }
+    
+    const filename = await storeFileLocally(file, 8, folder)
+    uploaded.push({ filename, folder, type: file.type })
+  }
+  
+  return uploaded
+})
+```
+
+### By User
+
+```ts server/api/user/upload.ts
+import { ServerFile } from "#file-storage/types"
+
+export default defineEventHandler(async (event) => {
+  const user = event.context.user
+  if (!user) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+  
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  // Store in user-specific folder
+  const userFolder = `/users/${user.id}`
+  const filename = await storeFileLocally(file, 8, userFolder)
+  
+  return { filename, folder: userFolder }
+})
+```
+
+### By Date
+
+```ts server/api/upload-dated.ts
+import { ServerFile } from "#file-storage/types"
+
+export default defineEventHandler(async (event) => {
+  const { file } = await readBody<{ file: ServerFile }>(event)
+  
+  // Create date-based folder structure: /2024/03/15
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  
+  const dateFolder = `/${year}/${month}/${day}`
+  const filename = await storeFileLocally(file, 8, dateFolder)
+  
+  return { filename, folder: dateFolder }
+})
+```
+
+### Nested Subdirectories
+
+```ts
+// Create nested structure: /users/123/profile/images
+const folder = `/users/${userId}/profile/images`
+const filename = await storeFileLocally(file, 8, folder)
+
+// The directory structure is created automatically
+```
+
+## File Naming Patterns
+
+Choose a file naming strategy that fits your needs.
+
+### Auto-generated IDs
+
+Use random IDs to prevent filename conflicts:
+
+```ts
+// Generate 8-character random ID
+const filename = await storeFileLocally(file, 8, '/uploads')
+// Result: aBcD1234.jpg
+
+// Longer IDs for more uniqueness
+const filename = await storeFileLocally(file, 16, '/uploads')
+// Result: aBcD1234eFgH5678.jpg
+```
+
+<Tip>
+  Recommended ID lengths:
+  - 8 characters: Good for most use cases (218 trillion combinations)
+  - 12 characters: High-traffic applications
+  - 16+ characters: Maximum uniqueness
+</Tip>
+
+### Timestamp-based Names
+
+```ts
+const timestamp = Date.now()
+const filename = await storeFileLocally(
+  file, 
+  `file-${timestamp}`, 
+  '/uploads'
+)
+// Result: file-1709481234567.jpg
+```
+
+### User-based Names
+
+```ts
+const userId = event.context.user.id
+const filename = await storeFileLocally(
+  file, 
+  `user-${userId}-avatar`, 
+  '/profiles'
+)
+// Result: user-123-avatar.jpg
+```
+
+### UUID-based Names
+
+```ts
+import { randomUUID } from 'crypto'
+
+const uuid = randomUUID()
+const filename = await storeFileLocally(file, uuid, '/uploads')
+// Result: 550e8400-e29b-41d4-a716-446655440000.jpg
+```
+
+### Combined Patterns
+
+```ts
+const userId = event.context.user.id
+const timestamp = Date.now()
+const randomId = generateId(4)
+
+const filename = await storeFileLocally(
+  file,
+  `${userId}-${timestamp}-${randomId}`,
+  '/uploads'
+)
+// Result: 123-1709481234567-aBcD.jpg
+```
+
+## Advanced File Management
+
+### File Inventory with Metadata
+
+Create an endpoint that returns file information:
+
+```ts server/api/files/inventory.ts
+import { stat } from 'fs/promises'
+import { join } from 'path'
+
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/uploads')
+  const mount = useRuntimeConfig().public.fileStorage.mount
+  
+  const inventory = await Promise.all(
+    files.map(async (filename) => {
+      const filePath = join(mount, 'uploads', filename)
+      const stats = await stat(filePath)
+      
+      return {
+        name: filename,
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime,
+        url: `/api/get/${filename}`
+      }
+    })
+  )
+  
+  return {
+    total: inventory.length,
+    totalSize: inventory.reduce((sum, f) => sum + f.size, 0),
+    files: inventory
+  }
+})
+```
+
+### Bulk Delete
+
+```ts server/api/files/bulk-delete.ts
+export default defineEventHandler(async (event) => {
+  const { filenames, folder } = await readBody<{
+    filenames: string[]
+    folder?: string
+  }>(event)
+  
+  const results = await Promise.allSettled(
+    filenames.map(filename => deleteFile(filename, folder || ''))
+  )
+  
+  const deleted = results.filter(r => r.status === 'fulfilled').length
+  const failed = results.filter(r => r.status === 'rejected').length
+  
+  return {
+    deleted,
+    failed,
+    total: filenames.length
+  }
+})
+```
+
+### Clean Up Old Files
+
+```ts server/api/files/cleanup.ts
+import { stat, unlink } from 'fs/promises'
+import { join } from 'path'
+
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/temp')
+  const mount = useRuntimeConfig().public.fileStorage.mount
+  
+  const maxAge = 7 * 24 * 60 * 60 * 1000 // 7 days
+  const now = Date.now()
+  let deletedCount = 0
+  
+  for (const filename of files) {
+    const filePath = join(mount, 'temp', filename)
+    const stats = await stat(filePath)
+    const age = now - stats.mtimeMs
+    
+    if (age > maxAge) {
+      await unlink(filePath)
+      deletedCount++
+    }
+  }
+  
+  return {
+    deleted: deletedCount,
+    remaining: files.length - deletedCount
+  }
+})
+```
+
+### Search Files
+
+```ts server/api/files/search.ts
+export default defineEventHandler(async (event) => {
+  const { query, folder } = getQuery(event)
+  
+  if (!query) {
+    throw createError({ statusCode: 400, message: 'Query required' })
+  }
+  
+  const files = await getFilesLocally(folder ? String(folder) : '')
+  const searchTerm = String(query).toLowerCase()
+  
+  const matches = files.filter(filename => 
+    filename.toLowerCase().includes(searchTerm)
+  )
+  
+  return {
+    query,
+    matches: matches.length,
+    files: matches
+  }
+})
+```
+
+## Best Practices
+
+### 1. Use Descriptive Folder Names
+
+```ts
+// Good: Clear purpose
+'/user-uploads'
+'/product-images'
+'/invoice-pdfs'
+
+// Avoid: Vague names
+'/files'
+'/data'
+'/stuff'
+```
+
+### 2. Implement Soft Deletes
+
+Instead of permanently deleting files, move them to a trash folder:
+
+```ts
+import { rename } from 'fs/promises'
+
+export const moveToTrash = async (filename: string, folder: string) => {
+  const sourcePath = getFileLocally(filename, folder)
+  const trashPath = getFileLocally(filename, '/trash')
+  
+  await rename(sourcePath, trashPath)
+}
+```
+
+### 3. Keep a File Registry
+
+Maintain a database record for each uploaded file:
+
+```ts
+interface FileRecord {
+  id: string
+  filename: string // stored filename
+  originalName: string // user's filename
+  folder: string
+  size: number
+  mimeType: string
+  uploadedBy: string
+  uploadedAt: Date
+}
+
+// Save to database after upload
+const filename = await storeFileLocally(file, 8, '/uploads')
+await db.files.create({
+  filename,
+  originalName: file.name,
+  folder: '/uploads',
+  size: file.size,
+  mimeType: file.type,
+  uploadedBy: user.id,
+  uploadedAt: new Date()
+})
+```
+
+### 4. Regular Cleanup
+
+Schedule periodic cleanup of temporary or old files:
+
+```ts
+// In a cron job or scheduled task
+const cleanupTempFiles = async () => {
+  const files = await getFilesLocally('/temp')
+  
+  for (const file of files) {
+    // Delete files older than 24 hours
+    const filePath = getFileLocally(file, '/temp')
+    const stats = await stat(filePath)
+    const age = Date.now() - stats.mtimeMs
+    
+    if (age > 24 * 60 * 60 * 1000) {
+      await deleteFile(file, '/temp')
+    }
+  }
+}
+```
+
+## Security Considerations
+
+<Warning>
+  Always validate user input when listing or deleting files to prevent unauthorized access.
+</Warning>
+
+### Validate Folder Access
+
+```ts
+const ALLOWED_FOLDERS = ['/uploads', '/images', '/documents']
+
+export default defineEventHandler(async (event) => {
+  const { folder } = getQuery(event)
+  const folderPath = String(folder || '')
+  
+  if (folderPath && !ALLOWED_FOLDERS.includes(folderPath)) {
+    throw createError({
+      statusCode: 403,
+      message: 'Access to this folder is forbidden'
+    })
+  }
+  
+  const files = await getFilesLocally(folderPath)
+  return { files }
+})
+```
+
+### Check File Ownership
+
+```ts
+export default defineEventHandler(async (event) => {
+  const user = event.context.user
+  const { filename } = await readBody(event)
+  
+  // Check if user owns the file
+  const fileRecord = await db.files.findOne({ filename })
+  
+  if (fileRecord.uploadedBy !== user.id) {
+    throw createError({
+      statusCode: 403,
+      message: 'You can only delete your own files'
+    })
+  }
+  
+  await deleteFile(filename, fileRecord.folder)
+})
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="File Upload" icon="upload" href="/guides/file-upload">
+    Learn how to upload files
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Configure storage paths and settings
+  </Card>
+</CardGroup>

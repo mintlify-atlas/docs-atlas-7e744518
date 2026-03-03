@@ -1,0 +1,316 @@
+---
+title: getFilesLocally
+description: Get a list of all files in the specified directory
+---
+
+## Function Signature
+
+```typescript
+getFilesLocally(
+  filelocation?: string
+): Promise<string[]>
+```
+
+## Description
+
+Returns an array of all filenames in the specified directory. This function is useful for listing available files, building file indexes, or implementing file browsers.
+
+## Parameters
+
+<ParamField path="filelocation" type="string" default="''">
+  The folder path to list files from, relative to the configured mount point.
+  - Use forward slashes for subdirectories (e.g., `/userFiles` or `/uploads/images`)
+  - Defaults to the root of the mount directory if not provided
+  - Path is automatically normalized and validated for security
+</ParamField>
+
+## Return Value
+
+<ResponseField name="files" type="Promise<string[]>">
+  An array of filenames in the specified directory.
+  - Returns an empty array `[]` if the directory doesn't exist or is empty
+  - Returns only filenames, not full paths
+  - Includes both files and subdirectories
+</ResponseField>
+
+## Behavior Details
+
+### Error Handling
+
+The function is designed to be forgiving:
+- If the directory doesn't exist, returns `[]` instead of throwing an error
+- If the mount is not configured, returns `[]`
+- Catches all read errors and returns an empty array
+
+<Note>
+  This graceful error handling makes the function safe to use without try-catch blocks in most cases, but you may want to add explicit checks if you need to distinguish between "directory is empty" and "directory doesn't exist".
+</Note>
+
+## Examples
+
+### List All Files in a Directory
+
+```typescript
+export default defineEventHandler(async (event) => {
+  // Get all files in the /userFiles directory
+  const files = await getFilesLocally('/userFiles')
+  
+  return { files }
+  // Returns: { files: ["aBcD1234.png", "file2.pdf", "image.jpg"] }
+})
+```
+
+### List Files in Root Directory
+
+```typescript
+export default defineEventHandler(async (event) => {
+  // Get all files in the root of the mount directory
+  const files = await getFilesLocally()
+  
+  return { files }
+})
+```
+
+### Build a File Gallery
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/gallery')
+  
+  // Filter for image files only
+  const imageFiles = files.filter(file => {
+    const ext = file.split('.').pop()?.toLowerCase()
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext || '')
+  })
+  
+  return { images: imageFiles }
+})
+```
+
+### Paginated File Listing
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { page = 1, limit = 10 } = getQuery(event)
+  
+  const allFiles = await getFilesLocally('/uploads')
+  
+  const startIndex = (Number(page) - 1) * Number(limit)
+  const endIndex = startIndex + Number(limit)
+  
+  return {
+    files: allFiles.slice(startIndex, endIndex),
+    total: allFiles.length,
+    page: Number(page),
+    totalPages: Math.ceil(allFiles.length / Number(limit))
+  }
+})
+```
+
+### File Statistics
+
+```typescript
+import { stat } from 'fs/promises'
+import path from 'path'
+
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/uploads')
+  
+  const fileStats = await Promise.all(
+    files.map(async (filename) => {
+      const filePath = getFileLocally(filename, '/uploads')
+      const stats = await stat(filePath)
+      
+      return {
+        name: filename,
+        size: stats.size,
+        modified: stats.mtime,
+        extension: path.extname(filename)
+      }
+    })
+  )
+  
+  return { files: fileStats }
+})
+```
+
+### Search Files by Pattern
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { search } = getQuery(event)
+  
+  const allFiles = await getFilesLocally('/documents')
+  
+  if (!search) {
+    return { files: allFiles }
+  }
+  
+  // Filter files matching the search query
+  const matchingFiles = allFiles.filter(file =>
+    file.toLowerCase().includes((search as string).toLowerCase())
+  )
+  
+  return { files: matchingFiles }
+})
+```
+
+### Organize Files by Extension
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/uploads')
+  
+  const filesByType = files.reduce((acc, file) => {
+    const ext = file.split('.').pop()?.toLowerCase() || 'unknown'
+    if (!acc[ext]) acc[ext] = []
+    acc[ext].push(file)
+    return acc
+  }, {} as Record<string, string[]>)
+  
+  return { filesByType }
+  // Returns: { 
+  //   filesByType: {
+  //     png: ["img1.png", "img2.png"],
+  //     pdf: ["doc.pdf"],
+  //     txt: ["notes.txt"]
+  //   }
+  // }
+})
+```
+
+### User-Specific File Listing
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const userId = event.context.user?.id
+  
+  if (!userId) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+  
+  // List files in user-specific directory
+  const files = await getFilesLocally(`/users/${userId}`)
+  
+  return { files }
+})
+```
+
+### Recent Files (with Metadata)
+
+```typescript
+import { stat } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/uploads')
+  
+  // Get file stats and sort by modification time
+  const filesWithStats = await Promise.all(
+    files.map(async (filename) => {
+      const filePath = getFileLocally(filename, '/uploads')
+      const stats = await stat(filePath)
+      return { filename, mtime: stats.mtime }
+    })
+  )
+  
+  // Sort by most recent first
+  const recentFiles = filesWithStats
+    .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+    .slice(0, 10)
+    .map(f => f.filename)
+  
+  return { recentFiles }
+})
+```
+
+### Calculate Directory Size
+
+```typescript
+import { stat } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const files = await getFilesLocally('/uploads')
+  
+  let totalSize = 0
+  
+  for (const filename of files) {
+    const filePath = getFileLocally(filename, '/uploads')
+    const stats = await stat(filePath)
+    if (stats.isFile()) {
+      totalSize += stats.size
+    }
+  }
+  
+  return {
+    fileCount: files.length,
+    totalSize,
+    totalSizeMB: (totalSize / 1024 / 1024).toFixed(2)
+  }
+})
+```
+
+## Return Value Details
+
+<Note>
+  The function returns only the filenames, not full paths. Use `getFileLocally()` to get the absolute path for each file if needed.
+</Note>
+
+```typescript
+// Example return value
+[
+  "aBcD1234.png",
+  "xYz56789.pdf",
+  "user-avatar.jpg"
+]
+```
+
+To get full paths:
+
+```typescript
+const files = await getFilesLocally('/uploads')
+const filePaths = files.map(filename => 
+  getFileLocally(filename, '/uploads')
+)
+```
+
+## Use Cases
+
+- **File browsers** - Build file management interfaces
+- **Gallery views** - List images for display
+- **File search** - Implement search and filter functionality
+- **Cleanup tasks** - Find old files for deletion
+- **Statistics** - Calculate storage usage and file counts
+- **Export** - Generate lists of available files for download
+- **Validation** - Check if expected files exist
+
+## Important Notes
+
+<Warning>
+  This function returns both files and directories. If you need to filter for files only, use Node.js `fs.stat()` to check `isFile()` on each entry.
+</Warning>
+
+```typescript
+import { stat } from 'fs/promises'
+
+const entries = await getFilesLocally('/uploads')
+const filesOnly = []
+
+for (const entry of entries) {
+  const fullPath = getFileLocally(entry, '/uploads')
+  const stats = await stat(fullPath)
+  if (stats.isFile()) {
+    filesOnly.push(entry)
+  }
+}
+```
+
+## See Also
+
+- [getFileLocally](/api/server/get-file-locally) - Get the absolute path of a specific file
+- [storeFileLocally](/api/server/store-file-locally) - Store a new file
+- [deleteFile](/api/server/delete-file) - Delete a file from storage
+- [retrieveFileLocally](/api/server/retrieve-file-locally) - Stream a file to the client
+
+## Source
+
+View the [source code](https://github.com/NyllRE/nuxt-file-storage/blob/main/src/runtime/server/utils/storage.ts#L146-L152) on GitHub.

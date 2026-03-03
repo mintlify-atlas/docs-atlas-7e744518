@@ -1,0 +1,385 @@
+---
+title: retrieveFileLocally
+description: Stream a file from local storage to the client with automatic content-type detection
+---
+
+## Function Signature
+
+```typescript
+retrieveFileLocally(
+  event: H3Event<EventHandlerRequest>,
+  filename: string,
+  filelocation?: string
+): Promise<NodeJS.ReadableStream>
+```
+
+## Description
+
+Retrieves a file from local storage and returns it as a readable stream for sending to the client. The function automatically sets appropriate HTTP headers including content-type, content-length, and content-disposition.
+
+## Parameters
+
+<ParamField path="event" type="H3Event<EventHandlerRequest>" required>
+  The H3 event object from your Nuxt/Nitro event handler. This is used to set response headers.
+</ParamField>
+
+<ParamField path="filename" type="string" required>
+  The name of the file to retrieve. This should be the filename returned by `storeFileLocally`.
+  - Must be a safe basename (no path separators)
+  - Example: `"aBcD1234.png"`
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  The folder path where the file is located, relative to the configured mount point.
+  - Use forward slashes for subdirectories (e.g., `/userFiles` or `/uploads/images`)
+  - Defaults to the root of the mount directory if not provided
+  - Path is automatically normalized and validated for security
+</ParamField>
+
+## Return Value
+
+<ResponseField name="stream" type="Promise<NodeJS.ReadableStream>">
+  A readable stream of the file contents. The stream is automatically handled by Nuxt/Nitro and sent to the client.
+</ResponseField>
+
+## HTTP Headers Set
+
+The function automatically sets the following response headers:
+
+<ResponseField name="Content-Type" type="string">
+  Automatically detected based on file extension. Falls back to `application/octet-stream` for unknown types.
+  
+  Supported MIME types:
+  - `image/png` - .png files
+  - `image/jpeg` - .jpg, .jpeg files
+  - `image/gif` - .gif files
+  - `image/svg+xml` - .svg files
+  - `application/pdf` - .pdf files
+  - `text/plain` - .txt files
+  - `text/html` - .html files
+  - `application/json` - .json files
+  - `application/octet-stream` - all other files
+</ResponseField>
+
+<ResponseField name="Content-Length" type="string">
+  The size of the file in bytes. Allows browsers to show download progress.
+</ResponseField>
+
+<ResponseField name="Content-Disposition" type="string">
+  Set to `inline; filename="{filename}"` which suggests to browsers to display the file (e.g., images, PDFs) rather than downloading it. The filename is included for browser reference.
+</ResponseField>
+
+## Behavior Details
+
+### File Validation
+
+The function validates that:
+1. The file exists at the specified path
+2. The path resolves to an actual file (not a directory)
+3. The file is within the configured mount directory
+
+<Warning>
+  If the file doesn't exist or is not a regular file, the function throws a 404 error.
+</Warning>
+
+### Streaming vs. Loading
+
+This function uses streaming, which is more efficient than loading the entire file into memory:
+- **Memory efficient** - Files are read in chunks
+- **Fast start** - Client receives data immediately
+- **Scalable** - Can handle large files without consuming excessive memory
+
+## Examples
+
+### Basic File Retrieval
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  
+  // Stream the file to the client
+  return await retrieveFileLocally(
+    event,
+    filename as string,
+    '/userFiles'
+  )
+})
+```
+
+### Image Endpoint
+
+```typescript
+// server/api/images/[filename].get.ts
+export default defineEventHandler(async (event) => {
+  const filename = getRouterParam(event, 'filename')
+  
+  if (!filename) {
+    throw createError({ statusCode: 400, message: 'Filename required' })
+  }
+  
+  return await retrieveFileLocally(event, filename, '/images')
+})
+
+// Access: GET /api/images/photo.png
+```
+
+### With Authentication
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  
+  // Check if user is authenticated
+  const user = await getUserFromEvent(event)
+  if (!user) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+  
+  // Verify user has access to this file
+  const hasAccess = await checkFileAccess(user.id, filename as string)
+  if (!hasAccess) {
+    throw createError({ statusCode: 403, message: 'Forbidden' })
+  }
+  
+  return await retrieveFileLocally(event, filename as string, '/private')
+})
+```
+
+### User Avatar Endpoint
+
+```typescript
+// server/api/users/[userId]/avatar.get.ts
+export default defineEventHandler(async (event) => {
+  const userId = getRouterParam(event, 'userId')
+  
+  if (!userId) {
+    throw createError({ statusCode: 400, message: 'User ID required' })
+  }
+  
+  // Get user's avatar filename from database
+  const user = await db.users.findById(userId)
+  if (!user?.avatarFilename) {
+    throw createError({ statusCode: 404, message: 'Avatar not found' })
+  }
+  
+  return await retrieveFileLocally(
+    event,
+    user.avatarFilename,
+    `/avatars/${userId}`
+  )
+})
+
+// Access: GET /api/users/123/avatar
+```
+
+### Download Endpoint with Custom Filename
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename, downloadName } = getQuery(event)
+  
+  // Override the Content-Disposition to force download with custom name
+  const stream = await retrieveFileLocally(
+    event,
+    filename as string,
+    '/documents'
+  )
+  
+  // Change to attachment to force download
+  event.node.res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${downloadName || filename}"`
+  )
+  
+  return stream
+})
+```
+
+### PDF Viewer Endpoint
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { documentId } = getQuery(event)
+  
+  // Get document info from database
+  const document = await db.documents.findById(documentId as string)
+  if (!document) {
+    throw createError({ statusCode: 404, message: 'Document not found' })
+  }
+  
+  // Stream PDF file
+  return await retrieveFileLocally(
+    event,
+    document.filename,
+    '/documents'
+  )
+})
+
+// Embed in HTML: <embed src="/api/document?documentId=123" type="application/pdf" />
+```
+
+### Conditional File Serving
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename, size } = getQuery(event)
+  
+  let filelocation = '/uploads'
+  
+  // Serve different versions based on query params
+  if (size === 'thumbnail') {
+    filelocation = '/uploads/thumbnails'
+  } else if (size === 'medium') {
+    filelocation = '/uploads/medium'
+  }
+  
+  return await retrieveFileLocally(
+    event,
+    filename as string,
+    filelocation
+  )
+})
+```
+
+### Error Handling with Fallback
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  
+  try {
+    return await retrieveFileLocally(
+      event,
+      filename as string,
+      '/uploads'
+    )
+  } catch (error) {
+    // Return a default image if file not found
+    if (error.statusCode === 404) {
+      return await retrieveFileLocally(
+        event,
+        'default-placeholder.png',
+        '/assets'
+      )
+    }
+    throw error
+  }
+})
+```
+
+### Range Request Support (for video streaming)
+
+```typescript
+import { stat, createReadStream } from 'fs'
+import { promisify } from 'util'
+
+const statAsync = promisify(stat)
+
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  const range = getHeader(event, 'range')
+  
+  const filePath = getFileLocally(filename as string, '/videos')
+  const stats = await statAsync(filePath)
+  
+  if (!range) {
+    // No range request, stream entire file
+    return await retrieveFileLocally(event, filename as string, '/videos')
+  }
+  
+  // Handle range request for video streaming
+  const parts = range.replace(/bytes=/, '').split('-')
+  const start = parseInt(parts[0], 10)
+  const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1
+  const chunksize = (end - start) + 1
+  
+  event.node.res.statusCode = 206
+  event.node.res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`)
+  event.node.res.setHeader('Accept-Ranges', 'bytes')
+  event.node.res.setHeader('Content-Length', chunksize)
+  event.node.res.setHeader('Content-Type', 'video/mp4')
+  
+  return createReadStream(filePath, { start, end })
+})
+```
+
+## Error Responses
+
+<ResponseField name="404 Not Found">
+  The file doesn't exist or the path resolves to a directory instead of a file.
+</ResponseField>
+
+<ResponseField name="400 Bad Request">
+  The resolved path is outside the configured mount directory (security error).
+</ResponseField>
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  
+  try {
+    return await retrieveFileLocally(
+      event,
+      filename as string,
+      '/uploads'
+    )
+  } catch (error) {
+    if (error.statusCode === 404) {
+      throw createError({
+        statusCode: 404,
+        message: 'File not found'
+      })
+    }
+    if (error.statusCode === 400) {
+      throw createError({
+        statusCode: 400,
+        message: 'Invalid file path'
+      })
+    }
+    throw error
+  }
+})
+```
+
+## Performance Considerations
+
+<Tip>
+  For frequently accessed files, consider adding caching headers:
+</Tip>
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  
+  // Add cache headers for better performance
+  event.node.res.setHeader('Cache-Control', 'public, max-age=31536000')
+  event.node.res.setHeader('ETag', generateETag(filename as string))
+  
+  return await retrieveFileLocally(
+    event,
+    filename as string,
+    '/static-assets'
+  )
+})
+```
+
+## Use Cases
+
+- **Image serving** - Display user-uploaded images
+- **Document viewing** - Serve PDFs and documents for inline viewing
+- **File downloads** - Allow users to download their files
+- **Avatar endpoints** - Serve user profile pictures
+- **Protected files** - Serve files with authentication/authorization
+- **Media streaming** - Stream video and audio files
+- **API responses** - Return files as API responses
+
+## See Also
+
+- [storeFileLocally](/api/server/store-file-locally) - Store files to be retrieved later
+- [getFileLocally](/api/server/get-file-locally) - Get file path for custom handling
+- [deleteFile](/api/server/delete-file) - Delete stored files
+- [getFilesLocally](/api/server/get-files-locally) - List all files in a directory
+
+## Source
+
+View the [source code](https://github.com/NyllRE/nuxt-file-storage/blob/main/src/runtime/server/utils/storage.ts#L217-L256) on GitHub.

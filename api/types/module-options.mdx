@@ -1,0 +1,136 @@
+---
+title: 'ModuleOptions'
+description: 'Configuration options for the nuxt-file-storage module'
+---
+
+## Interface Definition
+
+```typescript
+export interface ModuleOptions {
+  mount: string
+  version: string
+}
+```
+
+## Properties
+
+<ResponseField name="mount" type="string" required>
+  The absolute path to the location where files will be stored on the server. This is the root directory for all file storage operations.
+</ResponseField>
+
+<ResponseField name="version" type="string" required>
+  The version identifier for the module configuration.
+</ResponseField>
+
+## Usage
+
+The `ModuleOptions` interface is used when configuring the `nuxt-file-storage` module in your `nuxt.config.ts` file. These options are set under the `fileStorage` key.
+
+<Note>
+  It's recommended to use environment variables for the `mount` path to keep your configuration flexible across different environments (development, staging, production).
+</Note>
+
+## Examples
+
+### Basic Configuration
+
+```typescript
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    mount: '/home/user/project/server/files',
+    version: '1.0.0'
+  }
+})
+```
+
+### Using Environment Variables (Recommended)
+
+```typescript
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    // Use environment variable for flexibility
+    mount: process.env.FILE_STORAGE_MOUNT || '/default/path',
+    version: '1.0.0'
+  }
+})
+```
+
+```bash
+# .env
+FILE_STORAGE_MOUNT=/home/user/development/nuxt-file-storage/server/files
+```
+
+### Production Configuration
+
+```typescript
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    mount: process.env.NODE_ENV === 'production'
+      ? '/var/www/app/storage'
+      : '/home/user/dev/storage',
+    version: '1.0.0'
+  }
+})
+```
+
+### Different Storage Paths per Environment
+
+```typescript
+// nuxt.config.ts
+const getStoragePath = () => {
+  if (process.env.NODE_ENV === 'production') {
+    return '/var/www/production/storage'
+  }
+  if (process.env.NODE_ENV === 'staging') {
+    return '/var/www/staging/storage'
+  }
+  return '/home/user/dev/storage'
+}
+
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    mount: getStoragePath(),
+    version: '1.0.0'
+  }
+})
+```
+
+### Using Path Module for Cross-Platform Compatibility
+
+```typescript
+// nuxt.config.ts
+import { resolve } from 'path'
+
+export default defineNuxtConfig({
+  modules: ['nuxt-file-storage'],
+  
+  fileStorage: {
+    // Use path.resolve for cross-platform compatibility
+    mount: resolve(__dirname, 'server', 'files'),
+    version: '1.0.0'
+  }
+})
+```
+
+<Note>
+  After configuring the module, the `mount` path becomes the root directory for all file storage operations. When using functions like `storeFileLocally()`, paths are relative to this mount point.
+</Note>
+
+## Best Practices
+
+1. **Use Environment Variables**: Store sensitive paths in environment variables rather than hardcoding them
+2. **Absolute Paths**: Always use absolute paths for the `mount` option to avoid ambiguity
+3. **Permissions**: Ensure the specified directory has appropriate read/write permissions for your application
+4. **Backup Strategy**: Keep the storage directory in mind when planning your backup strategy
+5. **Security**: Don't expose the storage directory through your web server's public directory

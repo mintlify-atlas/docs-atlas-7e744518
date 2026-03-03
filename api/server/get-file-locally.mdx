@@ -1,0 +1,240 @@
+---
+title: getFileLocally
+description: Get the absolute file path for a file stored in the configured mount directory
+---
+
+## Function Signature
+
+```typescript
+getFileLocally(
+  filename: string,
+  filelocation?: string
+): string
+```
+
+## Description
+
+Returns the absolute file path for a file in the specified directory. This function validates the path to prevent directory traversal attacks and ensures the resolved path is within the configured mount point.
+
+## Parameters
+
+<ParamField path="filename" type="string" required>
+  The name of the file to locate. This should be the filename returned by `storeFileLocally`.
+  - Must be a safe basename (no path separators)
+  - Example: `"aBcD1234.png"`
+</ParamField>
+
+<ParamField path="filelocation" type="string" default="''">
+  The folder path where the file is located, relative to the configured mount point.
+  - Use forward slashes for subdirectories (e.g., `/userFiles` or `/uploads/images`)
+  - Defaults to the root of the mount directory if not provided
+  - Path is automatically normalized and validated for security
+</ParamField>
+
+## Return Value
+
+<ResponseField name="filePath" type="string">
+  The absolute file path in the format: `{mount}/{filelocation}/{filename}`
+  
+  Example: `/home/user/storage/userFiles/aBcD1234.png`
+</ResponseField>
+
+## Path Resolution Behavior
+
+The function performs several security checks:
+
+1. **Validates filename** - Ensures it's a safe basename without path separators
+2. **Normalizes file location** - Converts the path to a safe relative path
+3. **Resolves absolute path** - Combines mount, location, and filename
+4. **Validates mount boundary** - Ensures the resolved path is within the configured mount point
+
+<Warning>
+  If the resolved path is outside the configured mount directory, the function throws a 400 error to prevent directory traversal attacks.
+</Warning>
+
+## Examples
+
+### Basic Usage
+
+```typescript
+export default defineEventHandler(async (event) => {
+  // Get the absolute path to a file
+  const filePath = getFileLocally('requiredFile.txt', '/userFiles')
+  
+  // Returns: "/absolute/path/to/mount/userFiles/requiredFile.txt"
+  return { path: filePath }
+})
+```
+
+### Check if File Exists
+
+```typescript
+import { stat } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const filename = 'avatar.png'
+  const filePath = getFileLocally(filename, '/avatars')
+  
+  try {
+    const stats = await stat(filePath)
+    return {
+      exists: true,
+      size: stats.size,
+      modified: stats.mtime
+    }
+  } catch {
+    return { exists: false }
+  }
+})
+```
+
+### Read File Contents
+
+```typescript
+import { readFile } from 'fs/promises'
+
+export default defineEventHandler(async (event) => {
+  const filename = 'data.json'
+  const filePath = getFileLocally(filename, '/data')
+  
+  const content = await readFile(filePath, 'utf-8')
+  return JSON.parse(content)
+})
+```
+
+### Use with Image Processing
+
+```typescript
+import sharp from 'sharp'
+
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  const filePath = getFileLocally(filename as string, '/uploads')
+  
+  // Create a thumbnail
+  const thumbnail = await sharp(filePath)
+    .resize(200, 200)
+    .toBuffer()
+  
+  return thumbnail
+})
+```
+
+### Serve File with Custom Logic
+
+```typescript
+export default defineEventHandler(async (event) => {
+  const { filename } = getQuery(event)
+  
+  // Custom authorization check
+  const user = await getUserFromEvent(event)
+  if (!user) {
+    throw createError({ statusCode: 401, message: 'Unauthorized' })
+  }
+  
+  const filePath = getFileLocally(filename as string, '/private')
+  
+  // Return file path for further processing
+  return { authorized: true, path: filePath }
+})
+```
+
+### Compare with Root Directory Files
+
+```typescript
+export default defineEventHandler(async (event) => {
+  // Get file from root of mount (empty filelocation)
+  const rootFile = getFileLocally('config.json')
+  
+  // Get file from subdirectory
+  const userFile = getFileLocally('config.json', '/users/123')
+  
+  return {
+    rootPath: rootFile,
+    userPath: userFile
+  }
+})
+```
+
+## Error Handling
+
+<Warning>
+  The function throws an error if `fileStorage.mount` is not configured in your Nuxt config.
+</Warning>
+
+```typescript
+export default defineEventHandler(async (event) => {
+  try {
+    const filePath = getFileLocally('file.txt', '/uploads')
+    return { success: true, path: filePath }
+  } catch (error) {
+    if (error.statusCode === 400) {
+      // Path traversal attempt detected
+      return { success: false, error: 'Invalid file path' }
+    }
+    // Mount not configured or other error
+    return { success: false, error: error.message }
+  }
+})
+```
+
+## Common Errors
+
+**Mount not configured:**
+```
+Error: fileStorage.mount is not configured
+```
+Solution: Add `fileStorage.mount` to your `nuxt.config.ts`
+
+**Path outside mount:**
+```
+StatusCode: 400
+StatusMessage: Resolved path is outside of configured mount
+```
+Solution: This is a security error preventing directory traversal. Ensure your filename and filelocation parameters are valid.
+
+## Security Considerations
+
+<Note>
+  This function includes built-in security measures:
+  - Validates filename is a safe basename (no `../` or similar)
+  - Ensures resolved path stays within the mount directory
+  - Prevents directory traversal attacks
+  - Normalizes paths to prevent bypass attempts
+</Note>
+
+Never pass user-provided paths directly without validation:
+
+```typescript
+// ❌ Bad - vulnerable to path traversal
+const filePath = getFileLocally(
+  request.filename,  // User could pass "../../../etc/passwd"
+  request.folder
+)
+
+// ✅ Good - validate user input first
+const validFilenames = ['avatar.png', 'banner.jpg']
+if (!validFilenames.includes(request.filename)) {
+  throw createError({ statusCode: 400, message: 'Invalid filename' })
+}
+const filePath = getFileLocally(request.filename, '/uploads')
+```
+
+## Use Cases
+
+- **File operations** - Use with Node.js fs operations to read, modify, or analyze files
+- **Custom streaming** - Get the path to implement custom streaming logic
+- **File validation** - Check if files exist before performing operations
+- **Metadata retrieval** - Use with fs.stat to get file information
+- **Integration** - Pass file paths to third-party libraries (image processing, PDF generation, etc.)
+
+## See Also
+
+- [storeFileLocally](/api/server/store-file-locally) - Store a file and get its filename
+- [retrieveFileLocally](/api/server/retrieve-file-locally) - Stream a file directly to the client
+- [getFilesLocally](/api/server/get-files-locally) - Get all files in a directory
+- [deleteFile](/api/server/delete-file) - Delete a file from storage
+
+## Source
+
+View the [source code](https://github.com/NyllRE/nuxt-file-storage/blob/main/src/runtime/server/utils/storage.ts#L122-L139) on GitHub.

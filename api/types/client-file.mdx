@@ -1,0 +1,194 @@
+---
+title: 'ClientFile'
+description: 'TypeScript interface for file data on the client side'
+---
+
+## Interface Definition
+
+```typescript
+export interface ClientFile extends Blob {
+  content: string | ArrayBuffer | null | undefined
+  name: string
+  lastModified: number
+}
+```
+
+## Properties
+
+<ResponseField name="content" type="string | ArrayBuffer | null | undefined" required>
+  The file content, which can be in various formats:
+  - `string`: Data URL or text content
+  - `ArrayBuffer`: Binary data buffer
+  - `null` or `undefined`: When content hasn't been loaded yet
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  The name of the file, including its extension.
+</ResponseField>
+
+<ResponseField name="lastModified" type="number" required>
+  The timestamp (in milliseconds since epoch) of when the file was last modified.
+</ResponseField>
+
+<Expandable title="Inherited from Blob">
+  Since `ClientFile` extends the native `Blob` interface, it also includes all standard Blob properties and methods:
+  
+  - `size`: The size of the data in bytes
+  - `type`: The MIME type of the data
+  - `arrayBuffer()`: Returns a promise that resolves with the file contents as an ArrayBuffer
+  - `text()`: Returns a promise that resolves with the file contents as text
+  - `slice()`: Creates a new Blob containing a subset of the data
+</Expandable>
+
+## Usage
+
+The `ClientFile` interface is used on the client side when handling files selected by users through file input elements. The `useFileStorage` composable returns files in this format.
+
+## Differences from ServerFile
+
+<Note>
+  Key differences between `ClientFile` and `ServerFile`:
+  
+  - **ClientFile** extends `Blob` and is used on the client side
+  - **ClientFile** has `lastModified` as a `number` (timestamp in milliseconds)
+  - **ClientFile** `content` can be `string | ArrayBuffer | null | undefined`
+  - **ServerFile** has all properties as `string` types for JSON serialization
+  - **ServerFile** is used on the server side in API routes
+</Note>
+
+## Examples
+
+### Basic File Input Handling
+
+```vue
+<template>
+  <div>
+    <input type="file" @input="handleFileInput" />
+    <button @click="uploadFiles">Upload</button>
+  </div>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+
+const uploadFiles = async () => {
+  // files.value is an array of ClientFile objects
+  const response = await $fetch('/api/upload', {
+    method: 'POST',
+    body: {
+      files: files.value
+    }
+  })
+  
+  console.log('Upload response:', response)
+}
+</script>
+```
+
+### Accessing File Properties
+
+```vue
+<template>
+  <div>
+    <input type="file" @input="handleFileInput" multiple />
+    
+    <div v-for="(file, index) in files" :key="index">
+      <p>Name: {{ file.name }}</p>
+      <p>Size: {{ file.size }} bytes</p>
+      <p>Type: {{ file.type }}</p>
+      <p>Last Modified: {{ new Date(file.lastModified).toLocaleString() }}</p>
+    </div>
+  </div>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+</script>
+```
+
+### Multiple File Input Fields
+
+```vue
+<template>
+  <div>
+    <div>
+      <label>Profile Picture</label>
+      <input type="file" @input="handleProfileInput" accept="image/*" />
+    </div>
+    
+    <div>
+      <label>Documents</label>
+      <input type="file" @input="handleDocInput" multiple accept=".pdf,.doc,.docx" />
+    </div>
+    
+    <button @click="submitForm">Submit</button>
+  </div>
+</template>
+
+<script setup>
+// Separate instances for different input fields
+const { handleFileInput: handleProfileInput, files: profileImage } = useFileStorage()
+const { handleFileInput: handleDocInput, files: documents } = useFileStorage()
+
+const submitForm = async () => {
+  await $fetch('/api/profile', {
+    method: 'POST',
+    body: {
+      profile: profileImage.value,
+      documents: documents.value
+    }
+  })
+}
+</script>
+```
+
+### File Validation Before Upload
+
+```vue
+<template>
+  <div>
+    <input type="file" @input="handleFileInput" multiple />
+    <p v-if="error" class="error">{{ error }}</p>
+    <button @click="uploadFiles" :disabled="!canUpload">Upload</button>
+  </div>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+const error = ref('')
+
+const canUpload = computed(() => {
+  if (!files.value || files.value.length === 0) return false
+  
+  // Validate file sizes (max 5MB each)
+  const maxSize = 5 * 1024 * 1024
+  const oversized = files.value.some((file) => file.size > maxSize)
+  
+  if (oversized) {
+    error.value = 'Some files exceed the 5MB size limit'
+    return false
+  }
+  
+  // Validate file types
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/gif']
+  const invalidType = files.value.some((file) => !allowedTypes.includes(file.type))
+  
+  if (invalidType) {
+    error.value = 'Only JPEG, PNG, and GIF images are allowed'
+    return false
+  }
+  
+  error.value = ''
+  return true
+})
+
+const uploadFiles = async () => {
+  if (!canUpload.value) return
+  
+  await $fetch('/api/upload', {
+    method: 'POST',
+    body: { files: files.value }
+  })
+}
+</script>
+```

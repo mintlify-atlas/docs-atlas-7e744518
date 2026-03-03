@@ -1,0 +1,494 @@
+---
+title: Frontend File Handling
+description: Understanding how useFileStorage processes and serializes files on the client
+---
+
+## The useFileStorage Composable
+
+The `useFileStorage` composable is the primary interface for handling file inputs in your Vue components. It simplifies the complex process of reading files, serializing them for network transfer, and managing their state.
+
+### Basic Usage
+
+```vue
+<template>
+  <input type="file" @input="handleFileInput" />
+</template>
+
+<script setup>
+const { handleFileInput, files, clearFiles } = useFileStorage()
+</script>
+```
+
+### Return Values
+
+The composable returns an object with three properties:
+
+```ts
+{
+  files: Ref<ClientFile[]>,        // Reactive array of serialized files
+  handleFileInput: (event) => Promise<void>,  // File input handler
+  clearFiles: () => void           // Manually clear the files array
+}
+```
+
+## File Serialization to Data URLs
+
+When files are selected, they need to be converted from browser `File` objects into a format that can be transmitted over HTTP. The module uses the FileReader API to convert files into base64-encoded data URLs.
+
+### How Serialization Works
+
+```ts
+// From useFileStorage.ts:10-28
+const serializeFile = (file: ClientFile): Promise<void> => {
+  return new Promise<void>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e: ProgressEvent<FileReader>) => {
+      files.value.push({
+        ...file,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified,
+        content: e.target?.result,  // Base64 data URL
+      })
+      resolve()
+    }
+    reader.onerror = (error) => {
+      reject(error)
+    }
+    reader.readAsDataURL(file)
+  })
+}
+```
+
+### Data URL Format
+
+The serialized content looks like this:
+
+```
+data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDA...
+```
+
+This format includes:
+- **Protocol:** `data:`
+- **MIME type:** `image/jpeg`
+- **Encoding:** `base64`
+- **Content:** The actual base64-encoded file data
+
+<Info>
+Data URLs allow binary data to be embedded in JSON and transmitted as strings, making them perfect for file uploads in web applications.
+</Info>
+
+## Managing File State with the `files` Ref
+
+The `files` ref is a reactive Vue reference that holds an array of serialized files. This reactivity allows you to:
+
+- Display file previews in your UI
+- Show upload progress
+- List selected files before submission
+- Conditionally enable submit buttons
+
+### Accessing File Information
+
+```vue
+<template>
+  <div>
+    <input type="file" @input="handleFileInput" multiple />
+    
+    <ul v-if="files.length > 0">
+      <li v-for="(file, index) in files" :key="index">
+        {{ file.name }} - {{ formatBytes(file.size) }}
+      </li>
+    </ul>
+    
+    <button 
+      @click="upload" 
+      :disabled="files.length === 0"
+    >
+      Upload {{ files.length }} file(s)
+    </button>
+  </div>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+
+const formatBytes = (bytes: number) => {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+const upload = async () => {
+  await $fetch('/api/upload', {
+    method: 'POST',
+    body: { files: files.value }
+  })
+}
+</script>
+```
+
+### File Preview Example
+
+Since files are serialized to data URLs, you can use them directly in image sources:
+
+```vue
+<template>
+  <div>
+    <input 
+      type="file" 
+      @input="handleFileInput" 
+      accept="image/*"
+    />
+    
+    <div v-for="(file, index) in files" :key="index">
+      <img 
+        :src="file.content" 
+        :alt="file.name"
+        style="max-width: 200px;"
+      />
+    </div>
+  </div>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+</script>
+```
+
+<Tip>
+Image previews work because the data URL in `file.content` can be used directly as an image `src` attribute.
+</Tip>
+
+## The handleFileInput Function
+
+The `handleFileInput` function is designed to be used directly as an event handler for file inputs. It processes the `FileList` object and serializes all selected files.
+
+### Implementation Details
+
+```ts
+// From useFileStorage.ts:36-47
+const handleFileInput = async (event: any) => {
+  if (options.clearOldFiles) {
+    clearFiles()
+  }
+
+  const promises = []
+  for (const file of event.target.files) {
+    promises.push(serializeFile(file))
+  }
+
+  await Promise.all(promises)
+}
+```
+
+### Key Features
+
+1. **Automatic clearing** - Based on `clearOldFiles` option
+2. **Parallel processing** - All files are serialized concurrently using `Promise.all`
+3. **Async handling** - Returns a promise that resolves when all files are processed
+
+### Using the Returned Promise
+
+You can await the file input handling to ensure serialization is complete:
+
+```vue
+<template>
+  <input 
+    type="file" 
+    @input="handleFiles" 
+    :disabled="isProcessing"
+  />
+  <p v-if="isProcessing">Processing files...</p>
+</template>
+
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+const isProcessing = ref(false)
+
+const handleFiles = async (event) => {
+  isProcessing.value = true
+  try {
+    await handleFileInput(event)
+    console.log('All files processed:', files.value)
+  } finally {
+    isProcessing.value = false
+  }
+}
+</script>
+```
+
+## clearOldFiles Option Behavior
+
+The `clearOldFiles` option controls whether previously selected files are cleared when new files are chosen.
+
+### Default Behavior (clearOldFiles: true)
+
+```ts
+const { handleFileInput, files } = useFileStorage()
+// or explicitly:
+const { handleFileInput, files } = useFileStorage({ clearOldFiles: true })
+```
+
+**Timeline:**
+1. User selects `fileA.jpg` → `files = [fileA]`
+2. User selects `fileB.jpg` → `files = [fileB]` (fileA is cleared)
+
+<Info>
+This is the recommended default for most upload forms where users select files once and submit.
+</Info>
+
+### Accumulating Files (clearOldFiles: false)
+
+```ts
+const { handleFileInput, files } = useFileStorage({ clearOldFiles: false })
+```
+
+**Timeline:**
+1. User selects `fileA.jpg` → `files = [fileA]`
+2. User selects `fileB.jpg` → `files = [fileA, fileB]`
+3. User selects `fileC.jpg` → `files = [fileA, fileB, fileC]`
+
+**Use cases:**
+- Building a multi-file uploader where users add files incrementally
+- Creating a file queue system
+- Implementing "add more files" functionality
+
+### Manual Clearing
+
+Regardless of the option, you can always manually clear files:
+
+```vue
+<template>
+  <input type="file" @input="handleFileInput" />
+  <button @click="clearFiles">Clear All Files</button>
+  <p>Selected: {{ files.length }} files</p>
+</template>
+
+<script setup>
+const { handleFileInput, files, clearFiles } = useFileStorage()
+</script>
+```
+
+## Handling Multiple File Input Fields
+
+For forms with multiple file inputs, create separate composable instances:
+
+```vue
+<template>
+  <div>
+    <label>Profile Photo</label>
+    <input 
+      type="file" 
+      @input="handleProfileInput" 
+      accept="image/*"
+    />
+    
+    <label>Documents</label>
+    <input 
+      type="file" 
+      @input="handleDocumentInput" 
+      multiple
+    />
+    
+    <button @click="submit">Submit</button>
+  </div>
+</template>
+
+<script setup>
+// Separate instance for profile photo
+const { 
+  handleFileInput: handleProfileInput, 
+  files: profilePhoto 
+} = useFileStorage()
+
+// Separate instance for documents
+const { 
+  handleFileInput: handleDocumentInput, 
+  files: documents 
+} = useFileStorage({ clearOldFiles: false })
+
+const submit = async () => {
+  await $fetch('/api/submit', {
+    method: 'POST',
+    body: {
+      profile: profilePhoto.value,
+      documents: documents.value
+    }
+  })
+}
+</script>
+```
+
+<Warning>
+Always create separate `useFileStorage` instances for each file input field to avoid state conflicts.
+</Warning>
+
+## Advanced Patterns
+
+### File Validation Before Upload
+
+```vue
+<script setup>
+const { handleFileInput, files, clearFiles } = useFileStorage()
+const errors = ref<string[]>([])
+
+const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
+
+const validateAndHandle = async (event: Event) => {
+  errors.value = []
+  
+  // Clear and process files
+  await handleFileInput(event)
+  
+  // Validate after processing
+  for (const file of files.value) {
+    if (file.size > MAX_FILE_SIZE) {
+      errors.value.push(`${file.name} exceeds 5MB limit`)
+    }
+    
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      errors.value.push(`${file.name} has unsupported type`)
+    }
+  }
+  
+  // Clear invalid files
+  if (errors.value.length > 0) {
+    clearFiles()
+  }
+}
+</script>
+
+<template>
+  <div>
+    <input 
+      type="file" 
+      @input="validateAndHandle" 
+      multiple
+    />
+    
+    <div v-if="errors.length > 0" class="errors">
+      <p v-for="error in errors" :key="error">{{ error }}</p>
+    </div>
+  </div>
+</template>
+```
+
+### Upload Progress Tracking
+
+```vue
+<script setup>
+const { handleFileInput, files } = useFileStorage()
+const uploadProgress = ref(0)
+const isUploading = ref(false)
+
+const uploadWithProgress = async () => {
+  isUploading.value = true
+  uploadProgress.value = 0
+  
+  try {
+    const xhr = new XMLHttpRequest()
+    
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        uploadProgress.value = (e.loaded / e.total) * 100
+      }
+    })
+    
+    await new Promise((resolve, reject) => {
+      xhr.open('POST', '/api/upload')
+      xhr.setRequestHeader('Content-Type', 'application/json')
+      xhr.onload = () => resolve(xhr.response)
+      xhr.onerror = reject
+      xhr.send(JSON.stringify({ files: files.value }))
+    })
+  } finally {
+    isUploading.value = false
+  }
+}
+</script>
+
+<template>
+  <div>
+    <input type="file" @input="handleFileInput" multiple />
+    <button @click="uploadWithProgress" :disabled="isUploading">
+      Upload
+    </button>
+    
+    <div v-if="isUploading">
+      <progress :value="uploadProgress" max="100"></progress>
+      <span>{{ Math.round(uploadProgress) }}%</span>
+    </div>
+  </div>
+</template>
+```
+
+## Type Safety
+
+The composable is fully typed for TypeScript users:
+
+```ts
+import type { ClientFile } from 'nuxt-file-storage'
+
+// ClientFile interface
+interface ClientFile extends Blob {
+  content: string | ArrayBuffer | null | undefined
+  name: string
+  lastModified: number
+}
+
+// Usage with explicit typing
+const processFiles = (fileList: ClientFile[]) => {
+  fileList.forEach(file => {
+    console.log(`${file.name} (${file.type})`)
+  })
+}
+
+const { files } = useFileStorage()
+watchEffect(() => {
+  processFiles(files.value)
+})
+```
+
+## Performance Considerations
+
+<Note>
+**Large files and data URLs:** Converting large files to base64 data URLs increases their size by ~33% and can consume significant memory. For files over 10MB, consider:
+- Implementing chunked uploads
+- Using FormData with native File objects
+- Streaming directly to a backend storage service
+</Note>
+
+### Memory Management
+
+When handling many large files:
+
+```ts
+const { handleFileInput, files, clearFiles } = useFileStorage()
+
+const uploadAndClear = async () => {
+  try {
+    await $fetch('/api/upload', {
+      method: 'POST',
+      body: { files: files.value }
+    })
+  } finally {
+    // Free memory after successful upload
+    clearFiles()
+  }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Backend Storage" icon="server" href="/concepts/backend-storage">
+    Learn how to receive and store files on the server
+  </Card>
+  <Card title="Security" icon="shield" href="/concepts/security">
+    Understand security measures for file handling
+  </Card>
+</CardGroup>
